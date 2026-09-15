@@ -1,0 +1,13 @@
+[project]
+name = "pulso-backend"
+version = "0.1.0"
+description = "Pulso modular monolith backend"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "Django>=5.2.8,<5.3",
+    "djangorestframework>=3.16,<4",
+    "psycopg[binary]>=3.2,<4",
+]
+
+[tool.uv]
+package = false

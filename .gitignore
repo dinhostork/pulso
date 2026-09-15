@@ -1,1 +1,11 @@
-not_shared
+not_shared/
+
+# Python development and local configuration
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.env
+.env.*
+!.env.example
