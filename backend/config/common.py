@@ -7,6 +7,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "accounts.apps.AccountsConfig",
     "database.apps.DatabaseConfig",
+    "diagnostics.apps.DiagnosticsConfig",
 ]
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -38,3 +39,26 @@ LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
+
+# Celery: infrastructure only, not domain logic (ADR-0001, ADR-0005). Broker/result
+# URLs are environment-specific and defined in settings.py / settings_test.py.
+# A single default queue is the documented minimal queue topology for now;
+# workload-specific queues/routing are deferred until measured requirements exist.
+CELERY_TASK_DEFAULT_QUEUE = "default"
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_TASK_TRACK_STARTED = True
+# Finite connection/task timeouts: never block forever on a slow/unreachable
+# broker or a stuck task.
+CELERY_BROKER_CONNECTION_TIMEOUT = 5
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_TASK_TIME_LIMIT = 60
+CELERY_TASK_SOFT_TIME_LIMIT = 30
+CELERY_RESULT_EXPIRES = 3600
+# Tasks may be delivered or executed more than once (ADR-0005); acknowledge
+# after completion rather than on receipt, and treat a lost worker as
+# redeliverable. Persistent task effects must be idempotent.
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True

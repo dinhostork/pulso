@@ -62,11 +62,12 @@ containers also works. The backend publishes only on host loopback.
 | Python | `python:3.14.4-slim-bookworm` | Matches `.python-version`; multi-platform digest pinned in Dockerfile |
 | uv | `ghcr.io/astral-sh/uv:0.12.13` | Matches the existing dependency workflow; digest pinned in Dockerfile |
 | Database | `pgvector/pgvector:0.8.6-pg17-bookworm` | PostgreSQL 17.11 (`17.11-1.pgdg12+2`), pgvector 0.8.6; digest pinned in Compose |
+| Broker | `redis:8.10.1-alpine` | Celery broker/result backend; digest pinned in Compose |
 
 Tags and manifest digests were checked against their registries. Python 3.14.4
 preserves the backend runtime; PostgreSQL 17 on Bookworm provides a maintained
 pgvector image with the familiar `/var/lib/postgresql/data` layout. The database
-image supports Linux amd64 and arm64. See the
+and Redis images both support Linux amd64 and arm64. See the
 [upstream pgvector images](https://github.com/pgvector/pgvector#docker).
 
 Digests prevent tag rebuilds from changing the runtime unexpectedly. To update,
@@ -223,11 +224,11 @@ volume if desired. Do not prune global Docker state or delete another project.
 
 ## Current scope
 
-The stack covers the backend and PostgreSQL/pgvector only. It retains the
-issue #1 custom User and package boundaries. Database runtime validation is now
-possible using Compose; host-only checks still require a reachable configured
-PostgreSQL to verify applied migration history. Health endpoints, authentication
-API, workers, mobile, semantic features and CI remain separate issues.
+The stack covers the backend, PostgreSQL/pgvector and Redis/Celery. It retains
+the issue #1 custom User and package boundaries. Database runtime validation is
+now possible using Compose; host-only checks still require a reachable
+configured PostgreSQL to verify applied migration history. Health endpoints,
+authentication API, mobile, semantic features and CI remain separate issues.
 
 See [module boundaries](../docs/architecture/module-boundaries.md).
 
@@ -303,3 +304,151 @@ docker compose --env-file backend/.env.example --profile test rm -f postgres-tes
 This discards test data held in tmpfs and leaves the development database and its
 persistent volume intact. For an isolated validation project, use the same `-p`
 project name on every Compose command.
+
+## Worker infrastructure (Redis, Celery worker, optional Beat)
+
+The API, a Celery worker and an optional Celery Beat scheduler share the same
+backend codebase and image, running as separate Compose services/processes
+(ADR-0001, ADR-0005). This issue (#4) proves that infrastructure with a
+harmless diagnostic task; it introduces no product task.
+
+| Setting | Contract |
+| --- | --- |
+| `REDIS_HOST`, `REDIS_PORT` | Required, same pattern as the `POSTGRES_*` settings |
+| `CELERY_DIAGNOSTIC_BEAT_ENABLED` | Optional, defaults to `false`; only toggle enabling `diagnostics.tasks.diagnostic_ping` on a 30s Beat schedule |
+
+`REDIS_PORT` defaults to **6399** on the host to avoid colliding with a
+locally installed Redis on 6379; Compose always uses `redis:6379` between
+containers, the same pattern as `POSTGRES_HOST`/`POSTGRES_PORT`.
+
+### Queue, broker and timeout configuration
+
+`config/celery.py` builds one Celery app (`config.celery_app`) shared by the
+API, worker and Beat processes; `app.config_from_object("django.conf:settings",
+namespace="CELERY")` reads its configuration from Django settings, and
+`app.autodiscover_tasks()` finds `tasks.py` in each `INSTALLED_APPS` entry.
+`config/common.py` documents the minimal, workload-agnostic defaults shared by
+every environment:
+
+- a single `default` queue — workload-specific queues are deferred until a
+  concrete operational reason exists (ADR-0005's queue topology is a
+  non-goal for this issue);
+- a 5s broker connection timeout, so a slow/unreachable Redis fails fast
+  instead of hanging the API, worker or Beat process at startup;
+- a 60s hard / 30s soft task time limit, so a stuck task cannot run forever;
+- `CELERY_TASK_ACKS_LATE` and `CELERY_TASK_REJECT_ON_WORKER_LOST` are both
+  `True`: a task is only acknowledged after it finishes, and a worker that
+  dies mid-task makes the message redeliverable. Combined with ADR-0005's
+  "tasks may execute more than once" invariant, this is why task effects on
+  domain state must be idempotent.
+
+`CELERY_BROKER_URL`/`CELERY_RESULT_BACKEND` are environment-specific and
+defined in `config/settings.py` (development, Redis logical DB 0) and
+`config/settings_test.py` (isolated tests, DB 1 on the same local Redis
+instance — see below). Redis is a broker/result cache, not authoritative
+persistence: losing it loses queued/derived state, never domain data.
+
+### The diagnostic task
+
+`diagnostics/` is a temporary infrastructure app, not a product domain
+module. `diagnostics/tasks.py` defines `diagnostic_ping`, a thin `@shared_task`
+adapter that delegates to `diagnostics/application.py::execute_diagnostic_ping`
+(ADR-0005's task boundary). That function reads and writes no domain state —
+it only logs and returns a small `{"ok": True, "executed_at": ...}` result —
+so repeated or duplicate delivery cannot mutate authoritative data by
+construction. Its completion is observable through worker logs and through
+the task result (used here only as an operational/test probe, never as
+domain truth — ADR-0005's "Result handling").
+
+### Running the stack with a worker
+
+From the repository root, after the [build/migrate/start](#build-migrate-and-start)
+steps above:
+
+```bash
+docker compose --env-file backend/.env config --quiet
+docker compose --env-file backend/.env up -d --wait --wait-timeout 90 postgres redis
+docker compose --env-file backend/.env run --rm backend python manage.py migrate --noinput
+docker compose --env-file backend/.env up -d backend worker
+docker compose --env-file backend/.env logs --tail=50 backend worker redis
+```
+
+Prove real (non-eager) execution across containers — the worker must be a
+separately running process, not local/eager execution:
+
+```bash
+docker compose --env-file backend/.env run --rm backend python manage.py shell -c "
+from diagnostics.tasks import diagnostic_ping
+print(diagnostic_ping.delay().get(timeout=10))
+"
+docker compose --env-file backend/.env logs --tail=20 worker
+```
+
+The worker log shows `received`, the application log line and `succeeded`
+with the same result the caller printed. Celery reports the container as
+running with superuser privileges (`SecurityWarning`); this is expected for
+this bind-mounted local dev image, which runs every service as root, and is
+not specific to the worker.
+
+### Automated real-broker smoke check
+
+Ordinary `pytest` runs are independent of a running worker: `tests/test_diagnostics.py`
+calls the application function directly and calls the task with `.apply()`
+(synchronous, in-process, no broker). The real-broker check lives in
+`tests/test_celery_smoke.py`, marked `celery_smoke` and excluded from the
+default run through `pyproject.toml`'s `addopts` — it requires a separately
+running worker consuming the same Redis instance used by `config.settings_test`
+(logical DB 1, isolated from development DB 0):
+
+```bash
+docker compose --env-file backend/.env.example --profile test up -d --wait --wait-timeout 90 postgres-test redis
+cd backend
+DJANGO_SETTINGS_MODULE=config.settings_test uv run --locked celery -A config worker --loglevel=INFO --concurrency=2 &
+uv run --locked pytest -m celery_smoke
+```
+
+The check calls `.get(timeout=10)` on the dispatched result: it fails with a
+clear message within that 10s bound if no worker consumes the task, and it
+re-dispatches to assert that repeated delivery still leaves domain state
+(`User` count) unchanged. Stop the background worker afterward; it is not
+part of the normal test suite and does not start automatically.
+
+### Verifying the optional Beat schedule
+
+Beat is profile-gated (`profiles: ["beat"]`) and its diagnostic schedule is
+disabled unless explicitly enabled; neither runs during normal startup, and
+no product schedule exists yet. To verify it locally:
+
+```bash
+docker compose --env-file backend/.env up -d worker
+CELERY_DIAGNOSTIC_BEAT_ENABLED=true docker compose --env-file backend/.env --profile beat up -d beat
+docker compose --env-file backend/.env logs --tail=20 worker beat
+```
+
+Within 30s the Beat log shows `Sending due task diagnostic-ping`, and the
+worker log shows the same task `received`/`succeeded` sequence as above.
+Only one Beat instance may run against the local file-based schedule
+(`/tmp/celerybeat-schedule` inside the container) at a time; running two
+corrupts its last-run bookkeeping. Stop and remove `beat` afterward:
+
+```bash
+docker compose --env-file backend/.env --profile beat stop beat
+docker compose --env-file backend/.env --profile beat rm -f beat
+```
+
+### Conventions for future domain tasks
+
+These are established by this issue for later domain work (ADR-0005), not
+implemented as product behavior here:
+
+- dispatch a task after its triggering database transaction commits (e.g.
+  `transaction.on_commit`), never before — a worker must not load state
+  that has not been committed yet;
+- design task effects to be idempotent; a task may be delivered or executed
+  more than once (`CELERY_TASK_ACKS_LATE`/`CELERY_TASK_REJECT_ON_WORKER_LOST`
+  above make this a real, not theoretical, possibility;
+- pass entity identifiers as task parameters, not large serialized objects;
+- bound retries explicitly (`autoretry_for`, `max_retries`, backoff) for
+  transient failures; do not retry indefinitely on deterministic failures;
+- keep tasks thin adapters that call an application service, matching
+  `diagnostics/tasks.py` and `diagnostics/application.py` here.

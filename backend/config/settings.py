@@ -30,3 +30,27 @@ DATABASES = {
 }
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
+
+REDIS_HOST = required("REDIS_HOST")
+REDIS_PORT = port("REDIS_PORT")
+# Redis is a broker/result cache, not authoritative persistence (ADR-0005).
+# Broker and result backend share logical DB 0; there is only one process
+# group using it outside of tests, so separate DB indices add no isolation
+# value here (see settings_test.py for the isolated test DB index).
+CELERY_BROKER_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
+CELERY_RESULT_BACKEND = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
+
+# Disabled by default: normal startup must schedule no product jobs. Enabling
+# this verifies Celery Beat locally with the harmless diagnostic task; see
+# the worker infrastructure section of README.md.
+CELERY_DIAGNOSTIC_BEAT_ENABLED = boolean("CELERY_DIAGNOSTIC_BEAT_ENABLED")
+CELERY_BEAT_SCHEDULE = (
+    {
+        "diagnostic-ping": {
+            "task": "diagnostics.tasks.diagnostic_ping",
+            "schedule": 30.0,
+        }
+    }
+    if CELERY_DIAGNOSTIC_BEAT_ENABLED
+    else {}
+)

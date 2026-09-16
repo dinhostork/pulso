@@ -13,6 +13,7 @@ independent deployable services. This maps
 | `backend/api/` | HTTP route registry; currently has no endpoints |
 | `backend/accounts/` | Account identity, Django model integration and initial migration |
 | `backend/database/` | Shared PostgreSQL extension migration; no product models |
+| `backend/diagnostics/` | Temporary Celery/Redis infrastructure diagnostic (issue #4); no product models or domain rules |
 
 Accounts uses Django's `AbstractUser` and a database-generated `BigAutoField`
 primary key. Future relationships use `settings.AUTH_USER_MODEL` in model fields
@@ -78,12 +79,17 @@ These ownership boundaries preserve the accepted decisions:
 
 ## Background execution
 
-Under [ADR-0005](../adr/0005-asynchronous-processing-with-celery.md), future API,
-worker and scheduler processes share the same backend codebase. Task adapters
-invoke application services, dispatch after successful database commit where
-needed, and account for repeat execution. Redis and task-result metadata are not
-authoritative domain storage. Worker infrastructure belongs to issue #4 and is
-not implemented by this bootstrap.
+Under [ADR-0005](../adr/0005-asynchronous-processing-with-celery.md), the API,
+Celery worker and optional Celery Beat scheduler share the same backend
+codebase and image (`config/celery.py`, wired from `config/__init__.py`) as
+separate Compose services/processes. Task adapters invoke application
+services, dispatch after successful database commit where needed, and account
+for repeat execution: `CELERY_TASK_ACKS_LATE`/`CELERY_TASK_REJECT_ON_WORKER_LOST`
+are both enabled, so persistent task effects must be idempotent. Redis and
+task-result metadata are not authoritative domain storage. `diagnostics/` is
+the issue #4 diagnostic app proving this infrastructure with a harmless task;
+it introduces no product task, queue topology or schedule. See the worker
+infrastructure section of [backend/README.md](../../backend/README.md).
 
 ## Test isolation
 
