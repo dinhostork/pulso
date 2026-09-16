@@ -11,6 +11,7 @@ independent deployable services. This maps
 | --- | --- |
 | `backend/config/` | Shared application wiring (`common`), separate development/test settings, URL composition and ASGI/WSGI entry points |
 | `backend/api/` | HTTP route registry; currently has no endpoints |
+| `backend/health/` | Unauthenticated liveness/readiness endpoints and bounded dependency probes (issue #5); not part of the product API |
 | `backend/accounts/` | Account identity, Django model integration and initial migration |
 | `backend/database/` | Shared PostgreSQL extension migration; no product models |
 | `backend/diagnostics/` | Temporary Celery/Redis infrastructure diagnostic (issue #4); no product models or domain rules |

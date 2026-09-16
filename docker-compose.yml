@@ -23,6 +23,20 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      # Uses /health/ready (not /health/live): a meaningful local "is this
+      # backend actually able to serve traffic" signal for `up --wait`, not
+      # just "the process started". No service depends_on backend, so a
+      # transient dependency outage here cannot cascade (issue #5).
+      test:
+        [
+          "CMD", "python", "-c",
+          "import sys, urllib.request as u; sys.exit(0 if u.urlopen('http://127.0.0.1:8000/health/ready', timeout=3).status == 200 else 1)",
+        ]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   worker:
     build:

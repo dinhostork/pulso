@@ -62,3 +62,7 @@ CELERY_RESULT_EXPIRES = 3600
 # redeliverable. Persistent task effects must be idempotent.
 CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
+
+# Bounded timeout for /health/ready's dependency probes (issue #5): a slow or
+# unreachable PostgreSQL/Redis must fail fast, not hang the request.
+HEALTH_CHECK_TIMEOUT_SECONDS = 2

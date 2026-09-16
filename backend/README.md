@@ -224,11 +224,12 @@ volume if desired. Do not prune global Docker state or delete another project.
 
 ## Current scope
 
-The stack covers the backend, PostgreSQL/pgvector and Redis/Celery. It retains
-the issue #1 custom User and package boundaries. Database runtime validation is
-now possible using Compose; host-only checks still require a reachable
-configured PostgreSQL to verify applied migration history. Health endpoints,
-authentication API, mobile, semantic features and CI remain separate issues.
+The stack covers the backend, PostgreSQL/pgvector, Redis/Celery and liveness/
+readiness health endpoints. It retains the issue #1 custom User and package
+boundaries. Database runtime validation is now possible using Compose;
+host-only checks still require a reachable configured PostgreSQL to verify
+applied migration history. Authentication API, mobile, semantic features and
+CI remain separate issues.
 
 See [module boundaries](../docs/architecture/module-boundaries.md).
 
@@ -452,3 +453,94 @@ implemented as product behavior here:
   transient failures; do not retry indefinitely on deterministic failures;
 - keep tasks thin adapters that call an application service, matching
   `diagnostics/tasks.py` and `diagnostics/application.py` here.
+
+## Health endpoints (liveness and readiness)
+
+`GET /health/live` and `GET /health/ready` are unauthenticated, GET-only
+(other methods return 405) and require no request body. Neither persists
+data, enqueues work, or requires PostgreSQL/Redis credentials in the
+response. They live in `backend/health/` — a plain URL/view package like
+`backend/api/`, not a registered Django app — and are wired at the project
+root in `config/urls.py`, not under `/api/`, because they are process/
+infrastructure endpoints, not part of the product API.
+
+### `/health/live`
+
+Always returns **200** while the process can handle requests, independent of
+every external service by construction: the view calls no dependency probe
+at all.
+
+```json
+{"status": "ok"}
+```
+
+### `/health/ready`
+
+Probes only the dependencies strictly required to serve today's traffic,
+each with its own short-lived connection bounded by
+`HEALTH_CHECK_TIMEOUT_SECONDS` (2s; `config/common.py`) — a slow or
+unreachable dependency fails the probe instead of hanging the request.
+
+| Dependency | Required to serve traffic | Failure behavior |
+| --- | --- | --- |
+| PostgreSQL | Yes | `status: "unavailable"`, HTTP **503** |
+| Redis | No | `status: "degraded"`, HTTP **200** |
+
+```json
+{
+  "status": "ready",
+  "dependencies": {
+    "database": {"status": "healthy", "required": true},
+    "redis": {"status": "healthy", "required": false}
+  }
+}
+```
+
+**The required-vs-degraded decision (issue #5 scope item):** no HTTP endpoint
+exists yet that dispatches a Celery task synchronously as part of its
+response (ADR-0005's dispatch-after-commit convention is deliberately
+async). PostgreSQL is the domain source of truth and every future endpoint
+will need it; Redis failure only degrades background/async processing
+(ADR-0005), not the ability to serve an HTTP response. So PostgreSQL failure
+is `unavailable`/503; Redis failure is `degraded`/200 — ordinary request
+traffic continues, only work that would have been queued cannot run until
+Redis recovers. This is a decision about today's endpoint set; a future
+endpoint that synchronously depends on Redis would need to revisit it, with
+a new ADR if the tradeoffs warrant one.
+
+Worker/Beat process liveness is explicitly outside this contract: `/health/ready`
+probes broker (Redis) reachability only, never whether a worker is consuming
+from it (see the [worker infrastructure](#worker-infrastructure-redis-celery-worker-optional-beat)
+section above for that — `pytest -m celery_smoke` and the manual Compose
+walkthrough there).
+
+Responses are sanitized: only the fixed `status: "healthy"/"unhealthy"`
+enum and the fixed `required` boolean are returned per dependency — no
+hostnames, credentials or exception details, verified by
+`tests/test_health.py`.
+
+### Compose integration
+
+The `backend` service's healthcheck calls `/health/ready` (not `/health/live`):
+a meaningful "can this backend actually serve traffic" signal for
+`docker compose up --wait`, not just "the process started". No service
+`depends_on` backend, so a transient dependency outage here cannot cascade
+into another service failing to start; it only delays/fails `--wait` and
+shows as `unhealthy` in `docker compose ps` until the dependency recovers.
+Verified locally: stopping `postgres` while `backend` is running turns
+`/health/ready` into 503 immediately (connection refused) while `/health/live`
+stays 200, and the container's aggregate Docker health state flips to
+`unhealthy` after `retries` (10) consecutive failed checks (~30s at the
+configured 3s interval) — tolerant of a brief blip, not a hair-trigger.
+
+### Tests
+
+```bash
+uv run --locked pytest tests/test_health.py -v
+```
+
+Dependency-failure tests point the PostgreSQL/Redis probe at `10.255.255.1`
+(a reserved, silently-dropping test address) rather than mocking the
+probe's return value, so they exercise the real bounded-timeout connect
+path, not just the response-building logic around it; each asserts wall-clock
+elapsed time stays under the configured timeout plus margin.

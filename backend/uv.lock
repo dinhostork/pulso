@@ -241,6 +241,7 @@ dependencies = [
     { name = "django" },
     { name = "djangorestframework" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "redis" },
 ]
 
 [package.dev-dependencies]
@@ -256,6 +257,7 @@ requires-dist = [
     { name = "django", specifier = ">=5.2.8,<5.3" },
     { name = "djangorestframework", specifier = ">=3.16,<4" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },
+    { name = "redis", specifier = ">=6.4,<7" },
 ]
 
 [package.metadata.requires-dev]
