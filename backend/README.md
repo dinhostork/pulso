@@ -49,24 +49,184 @@ and CSRF cookies require HTTPS. Generate a secret key before any deployment;
 the example values are not deployment credentials. These settings are a
 bootstrap, not a complete production deployment configuration.
 
-## Current validation limits
+## Local Compose stack
 
-`manage.py check` can validate this bootstrap without a database server.
-`makemigrations --check --dry-run` compares model state with migration files;
-it may also warn that PostgreSQL migration history cannot be checked when no
-server is running. A zero exit status with “No changes detected” validates model
-consistency only, not applied database history.
+Prerequisites: Docker Engine with BuildKit and Docker Compose v2.20 or newer
+(`docker compose`, not legacy `docker-compose`). Docker Desktop with Linux
+containers also works. The backend publishes only on host loopback.
 
-The initial `accounts` migration declares the custom user before future domain
-migrations depend on it. Database-generated integer identity and Django password
-hashing are retained. No authentication endpoint or mobile credential mechanism
-is selected here.
+### Image versions
 
-PostgreSQL infrastructure, pgvector setup and actual migration execution belong
-to [issue #2](https://github.com/dinhostork/pulso/issues/2). This issue does not
-provide Compose services or claim database runtime validation. All API paths
-currently have no endpoints; health and authentication endpoints arrive later.
-Quality/test tooling and CI belong to later Foundation issues.
+| Runtime | Pinned image tag | Version strategy |
+| --- | --- | --- |
+| Python | `python:3.14.4-slim-bookworm` | Matches `.python-version`; multi-platform digest pinned in Dockerfile |
+| uv | `ghcr.io/astral-sh/uv:0.12.13` | Matches the existing dependency workflow; digest pinned in Dockerfile |
+| Database | `pgvector/pgvector:0.8.6-pg17-bookworm` | PostgreSQL 17.11 (`17.11-1.pgdg12+2`), pgvector 0.8.6; digest pinned in Compose |
 
-See [module boundaries](../docs/architecture/module-boundaries.md) for package
-responsibilities and the mapping to the eight accepted ADRs.
+Tags and manifest digests were checked against their registries. Python 3.14.4
+preserves the backend runtime; PostgreSQL 17 on Bookworm provides a maintained
+pgvector image with the familiar `/var/lib/postgresql/data` layout. The database
+image supports Linux amd64 and arm64. See the
+[upstream pgvector images](https://github.com/pgvector/pgvector#docker).
+
+Digests prevent tag rebuilds from changing the runtime unexpectedly. To update,
+verify the replacement image, change its tag and digest together, rebuild and
+repeat migrations/vector/persistence checks on a disposable project. PostgreSQL
+major upgrades require a separate data migration; never point a new major at an
+existing volume without an upgrade plan.
+
+### Configuration and networking
+
+Run these commands from the **repository root**. Create `backend/.env` from the
+example only if it does not already exist; preserve an existing local file.
+
+```bash
+cp -n backend/.env.example backend/.env
+```
+
+Use `--env-file backend/.env` on every Compose command. There is no second root
+environment file. Compose passes only declared variables to each service; the
+database does not receive Django's secret key.
+
+The same file supports both execution modes:
+
+| Connection | Host | Port |
+| --- | --- | --- |
+| Django running on the host | `POSTGRES_HOST=127.0.0.1` | `POSTGRES_PORT=55432` in the example |
+| Django in Compose | `postgres` (overridden explicitly by Compose) | `5432` (internal container port) |
+
+The database host port defaults to 55432 to avoid interfering with an existing
+host PostgreSQL on 5432. Update `POSTGRES_PORT` if needed. `BACKEND_PORT` optionally
+changes the backend host port (default 8000). Both ports bind to `127.0.0.1`.
+
+Shell exports override Compose `--env-file` values. To use the file exclusively,
+run the workflow in a shell where these names are unset:
+
+```bash
+unset SECRET_KEY DEBUG ALLOWED_HOSTS POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD POSTGRES_HOST POSTGRES_PORT BACKEND_PORT
+```
+
+If you intentionally override a port (e.g. for an isolated validation project),
+keep the same override for all commands. Single-quote values containing literal
+`$` or `#` in the env file as appropriate for Compose's env-file syntax.
+Use `config --quiet` to validate without dumping credentials. The full rendered
+configuration and container inspection can contain environment values; do not
+publish those outputs.
+
+These are disposable local credentials, not production credentials. The official
+PostgreSQL entrypoint creates the local `POSTGRES_USER` with permission to enable
+extensions. Changing credentials in `.env` does not update a previously
+initialized database: change the role explicitly or deliberately reset only a
+disposable project.
+
+### Build, migrate and start
+
+```bash
+docker compose --env-file backend/.env config --quiet
+docker compose --env-file backend/.env build backend
+docker compose --env-file backend/.env up -d --wait --wait-timeout 90 postgres
+docker compose --env-file backend/.env run --rm backend python manage.py migrate --noinput
+docker compose --env-file backend/.env up -d backend
+docker compose --env-file backend/.env logs --tail=50 backend postgres
+```
+
+The database health check uses `pg_isready` over TCP; Compose waits for
+`service_healthy` before starting Django. It proves PostgreSQL is accepting
+connections, not that Django credentials or schema are correct. The explicit
+migration command proves those prerequisites before API startup. There are no
+startup sleeps and no automatic migrations hidden in the image command.
+
+The backend runs Django's development server on `0.0.0.0:8000` inside the
+container. Source is bind-mounted at `/app` for reload; dependencies live at
+`/opt/venv`, so a host `.venv` does not replace them. Rebuild after dependency or
+Dockerfile changes. `.dockerignore` keeps host environments, secrets and caches
+out of image build context.
+
+There are no application HTTP endpoints yet. With the example `DEBUG=true`
+and an empty route registry, Django serves its installation page with **200** at
+`http://127.0.0.1:8000/api/`; with debug disabled, an unmatched path returns **404**.
+This can verify the HTTP listener, but it is not a health API. Startup and
+database checks are separate.
+
+### Schema ownership and pgvector
+
+`database` is a small Django infrastructure app with no product models.
+`database/0001_enable_vector` uses Django's `CreateExtension("vector")` operation.
+The image provides the extension binaries; `migrate` enables the extension in the
+selected database and records it in Django migration history. There is no
+competing init SQL script. Re-running `migrate` skips applied migrations, and
+`CreateExtension` also tolerates an already enabled extension.
+
+Use a migration role with extension privileges when adapting this beyond local
+development. Do not reverse the extension migration once later tables use vector
+types; removing an extension can remove its dependent objects.
+
+```bash
+docker compose --env-file backend/.env run --rm backend python manage.py check
+docker compose --env-file backend/.env run --rm backend python manage.py makemigrations --check --dry-run
+docker compose --env-file backend/.env run --rm backend python manage.py showmigrations
+# The container shell expands its own configured user/database, not host variables.
+docker compose --env-file backend/.env exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1' <<'SQL'
+SELECT version();
+SELECT extname, extversion FROM pg_extension WHERE extname = 'vector';
+SELECT to_regclass('public.accounts_user');
+SELECT app, name FROM django_migrations ORDER BY app, name;
+SELECT '[0,0,0]'::vector <-> '[3,4,0]'::vector AS l2_distance;
+SQL
+```
+
+The distance must be **5**: `<->` is Euclidean (L2) distance and
+`sqrt(3² + 4²) = 5`. This uses literals, without an embedding model or table.
+
+### Stop, restart and reset
+
+Normal stop/start preserves `postgres_data`:
+
+```bash
+docker compose --env-file backend/.env down
+docker compose --env-file backend/.env up -d --wait --wait-timeout 90 postgres
+docker compose --env-file backend/.env up -d backend
+```
+
+For a process restart without removing containers:
+
+```bash
+docker compose --env-file backend/.env restart postgres backend
+docker compose --env-file backend/.env up -d --wait --wait-timeout 90 postgres
+docker compose --env-file backend/.env logs --tail=50 backend postgres
+```
+
+**Destructive reset — deletes this project's database permanently:**
+
+```bash
+docker compose --env-file backend/.env down --volumes
+```
+
+Use that only after inspecting the project's resources and confirming its data
+is disposable. It is not part of routine restart. After a reset, repeat database
+startup and the explicit migration command.
+
+### Isolated fresh-volume verification
+
+Use an unused project name via `-p`, such as `pulso-issue2-check`, on **every**
+Compose command. First inspect existing containers and volumes with that project
+label. Use unused host ports through `POSTGRES_PORT` and `BACKEND_PORT` overrides.
+Compose automatically namespaces the network and `postgres_data` volume by
+project; no fixed container name or external volume is used.
+
+On the fresh project: follow the build/start/migrate steps, verify SQL above,
+create `issue2_persistence_test` through Django's `create_user`, then run normal
+`down` and `up` without `--volumes`. Assert that the same account primary key
+still exists. Re-run `config --quiet` and `migrate --noinput`; both must succeed
+without losing the account. Only then remove that test project's resources and
+volume if desired. Do not prune global Docker state or delete another project.
+
+## Current scope
+
+The stack covers the backend and PostgreSQL/pgvector only. It retains the
+issue #1 custom User and package boundaries. Database runtime validation is now
+possible using Compose; host-only checks still require a reachable configured
+PostgreSQL to verify applied migration history. Health endpoints, authentication
+API, workers, mobile, semantic features and CI remain separate issues.
+
+See [module boundaries](../docs/architecture/module-boundaries.md).

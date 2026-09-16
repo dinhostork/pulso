@@ -12,6 +12,7 @@ independent deployable services. This maps
 | `backend/config/` | Environment validation, Django settings, URL composition and ASGI/WSGI entry points |
 | `backend/api/` | HTTP route registry; currently has no endpoints |
 | `backend/accounts/` | Account identity, Django model integration and initial migration |
+| `backend/database/` | Shared PostgreSQL extension migration; no product models |
 
 Accounts uses Django's `AbstractUser` and a database-generated `BigAutoField`
 primary key. Future relationships use `settings.AUTH_USER_MODEL` in model fields
@@ -58,8 +59,9 @@ These ownership boundaries preserve the accepted decisions:
 
 - [ADR-0002](../adr/0002-postgresql-pgvector.md): PostgreSQL is the shared primary
   datastore; pgvector will live alongside relational data. Sharing a database
-  does not transfer table ownership. Local infrastructure and extension setup
-  belong to issue #2.
+  does not transfer table ownership. The root Compose stack provides local
+  PostgreSQL/pgvector; the `database` infrastructure app enables `vector`
+  through a Django migration.
 - [ADR-0003](../adr/0003-article-not-equal-story.md): News keeps Articles distinct
   from Stories and preserves source provenance.
 - [ADR-0004](../adr/0004-ai-is-not-a-source.md): generated output is derived;

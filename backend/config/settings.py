@@ -22,6 +22,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "rest_framework",
     "accounts.apps.AccountsConfig",
+    "database.apps.DatabaseConfig",
 ]
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
