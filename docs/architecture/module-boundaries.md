@@ -12,14 +12,19 @@ independent deployable services. This maps
 | `backend/config/` | Shared application wiring (`common`), separate development/test settings, URL composition and ASGI/WSGI entry points |
 | `backend/api/` | HTTP route registry; currently has no endpoints |
 | `backend/health/` | Unauthenticated liveness/readiness endpoints and bounded dependency probes (issue #5); not part of the product API |
-| `backend/accounts/` | Account identity, Django model integration and initial migration |
+| `backend/accounts/` | Account identity, Django model integration, initial migration and JWT login/logout/refresh/current-user endpoints (issue #6, ADR-0009) |
 | `backend/database/` | Shared PostgreSQL extension migration; no product models |
 | `backend/diagnostics/` | Temporary Celery/Redis infrastructure diagnostic (issue #4); no product models or domain rules |
 
 Accounts uses Django's `AbstractUser` and a database-generated `BigAutoField`
 primary key. Future relationships use `settings.AUTH_USER_MODEL` in model fields
 and `get_user_model()` at runtime. Username/password and permissions retain
-Django behavior. No profile, position or API authentication contract is introduced.
+Django behavior. `accounts/views.py` and `accounts/serializers.py` are thin
+DRF adapters around `django.contrib.auth.authenticate()` and
+`djangorestframework-simplejwt`, not a separate application-service layer:
+there is still no product use case beyond authenticating an existing
+account, so no additional indirection was introduced for its own sake. No
+profile, position or registration contract is introduced.
 
 There is no application use case to implement yet, so no empty application,
 port or service packages are created. Add module-local application services when
@@ -50,7 +55,7 @@ interface rather than another module's internal models.
 
 | Module | Owns | Current state |
 | --- | --- | --- |
-| Accounts | Stable user identity and account authentication foundation | Minimal user model exists; API authentication is deferred to issue #6 |
+| Accounts | Stable user identity and account authentication foundation | User model plus JWT login/logout/refresh/current-user endpoints ([ADR-0009](../adr/0009-jwt-mobile-authentication.md)); no registration or profile fields |
 | News | Source publications, Articles, Stories and source-grounded factual synthesis | Planned; no package or models |
 | Opinion | Human Opinions, declared positions, derived Perspectives and Pulse | Planned; no package or models |
 | Recommendation | Discovery ranking, interests and ranking signals | Planned; no package or models |

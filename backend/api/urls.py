@@ -1,4 +1,6 @@
-"""API route registry. Product and health endpoints arrive in later issues."""
+"""API route registry. Product endpoints arrive in later issues."""
+
+from django.urls import include, path
 
 app_name = "api"
-urlpatterns = []
+urlpatterns = [path("auth/", include("accounts.urls"))]

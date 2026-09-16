@@ -1,10 +1,13 @@
 """Application wiring shared by development and isolated test settings."""
 
+from datetime import timedelta
+
 INSTALLED_APPS = [
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "rest_framework",
+    "rest_framework_simplejwt.token_blacklist",
     "accounts.apps.AccountsConfig",
     "database.apps.DatabaseConfig",
     "diagnostics.apps.DiagnosticsConfig",
@@ -29,11 +32,25 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
-# The mobile API authentication mechanism belongs to issue #6.
-# No authentication adapters or public permissions are enabled implicitly.
+# Mobile API authentication (issue #6, ADR-0009): stateless JWT bearer
+# tokens, not cookie/session auth, so CSRF protection does not apply to
+# these endpoints. No public permissions are enabled implicitly; every view
+# is IsAuthenticated unless it explicitly opts out (login, logout, refresh).
 REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": [],
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+    ],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
+}
+# See ADR-0009 for the lifetime/rotation rationale, including the documented
+# residual-validity window: logout blacklists the refresh token immediately,
+# but an already-issued, not-yet-expired access token keeps working until it
+# expires naturally (JWTs are verified statelessly, not looked up per request).
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=14),
+    "ROTATE_REFRESH_TOKENS": False,
+    "UPDATE_LAST_LOGIN": True,
 }
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"

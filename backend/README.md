@@ -224,12 +224,12 @@ volume if desired. Do not prune global Docker state or delete another project.
 
 ## Current scope
 
-The stack covers the backend, PostgreSQL/pgvector, Redis/Celery and liveness/
-readiness health endpoints. It retains the issue #1 custom User and package
-boundaries. Database runtime validation is now possible using Compose;
-host-only checks still require a reachable configured PostgreSQL to verify
-applied migration history. Authentication API, mobile, semantic features and
-CI remain separate issues.
+The stack covers the backend, PostgreSQL/pgvector, Redis/Celery, liveness/
+readiness health endpoints and mobile API authentication. It retains the
+issue #1 custom User and package boundaries. Database runtime validation is
+now possible using Compose; host-only checks still require a reachable
+configured PostgreSQL to verify applied migration history. Mobile, semantic
+features and CI remain separate issues.
 
 See [module boundaries](../docs/architecture/module-boundaries.md).
 
@@ -544,3 +544,82 @@ Dependency-failure tests point the PostgreSQL/Redis probe at `10.255.255.1`
 probe's return value, so they exercise the real bounded-timeout connect
 path, not just the response-building logic around it; each asserts wall-clock
 elapsed time stays under the configured timeout plus margin.
+
+## Authentication
+
+The mobile API authenticates with **stateless JWT bearer tokens**
+(`djangorestframework-simplejwt`), not cookies/sessions — see
+[ADR-0009](../docs/adr/0009-jwt-mobile-authentication.md) for the full
+decision, alternatives considered, and the recorded residual-validity
+contract for logout. This section is the executable/operational half of
+that ADR.
+
+| Method | Path | Auth | Request body | Success | Failure |
+| --- | --- | --- | --- | --- | --- |
+| `POST` | `/api/auth/login` | None | `{"username", "password"}` | 200 `{"access", "refresh"}` | 400, generic `"Invalid credentials."` for wrong password, unknown username **or** inactive account |
+| `POST` | `/api/auth/refresh` | None (refresh token is the credential) | `{"refresh"}` | 200 `{"access"}` | 401 if expired, blacklisted or wrong token type |
+| `POST` | `/api/auth/logout` | None (refresh token is the credential) | `{"refresh"}` | 205, empty body | 400 if missing/invalid/already-blacklisted |
+| `GET` | `/api/auth/me` | `Authorization: Bearer <access>` | — | 200 `{"id", "username"}` | 401 if missing/invalid/expired |
+
+Access tokens last 15 minutes; refresh tokens last 14 days
+(`SIMPLE_JWT` in `config/common.py`). `/api/auth/me` returns only `id` and
+`username` — no email, name or permission fields exist on the account yet.
+
+### Local account provisioning
+
+No registration endpoint exists (issue #6 excludes it). Provision a local
+account with Django's own tooling:
+
+```bash
+# Interactive, prompts for username/password:
+docker compose --env-file backend/.env run --rm backend python manage.py createsuperuser
+# Or non-interactively, e.g. for a throwaway local test account:
+docker compose --env-file backend/.env run --rm backend python manage.py shell -c "
+from django.contrib.auth import get_user_model
+get_user_model().objects.create_user(username='local-dev', password='replace-with-a-real-password')
+"
+```
+
+### Executable request examples
+
+Against the Compose stack (`docker compose --env-file backend/.env up -d backend`,
+published on `http://127.0.0.1:8000`):
+
+```bash
+# Login
+curl -s -X POST http://127.0.0.1:8000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username": "local-dev", "password": "replace-with-a-real-password"}'
+# {"access": "...", "refresh": "..."}
+
+# Current user (replace $ACCESS with the value above)
+curl -s http://127.0.0.1:8000/api/auth/me -H "Authorization: Bearer $ACCESS"
+# {"id": 1, "username": "local-dev"}
+
+# Refresh (replace $REFRESH with the value from login)
+curl -s -X POST http://127.0.0.1:8000/api/auth/refresh \
+  -H 'Content-Type: application/json' \
+  -d "{\"refresh\": \"$REFRESH\"}"
+# {"access": "..."}
+
+# Logout — blacklists $REFRESH; the access token above keeps working until
+# its own 15-minute expiry (documented residual-validity window, ADR-0009)
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8000/api/auth/logout \
+  -H 'Content-Type: application/json' \
+  -d "{\"refresh\": \"$REFRESH\"}"
+# 205
+```
+
+### Tests
+
+```bash
+uv run --locked pytest tests/test_authentication.py -v
+```
+
+Covers: valid/invalid/unknown/inactive login (with byte-identical generic
+failure responses), password never appearing in any response, current-user
+with no/malformed/expired/valid tokens, refresh (including rejecting an
+access token used as a refresh token), logout (missing field, already-used
+refresh token, blocking further refresh), the documented residual-validity
+window on an already-issued access token after logout, and that neither
+login nor logout requires a CSRF token (`Client(enforce_csrf_checks=True)`).
