@@ -1,0 +1,171 @@
+name: CI
+
+# Stable check names for branch protection (job `name:` values below):
+#   backend, worker-smoke, mobile
+# See the "Continuous integration" section of the root README.md.
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Uses the same disposable, credential-free services and commands as
+      # backend/README.md's "Backend quality and isolated tests" section.
+      # Redis is required here too: /health/ready's own tests really ping it
+      # (health/checks.py), not just the worker-smoke job below.
+      - name: Start disposable PostgreSQL/pgvector and Redis
+        run: docker compose --env-file backend/.env.example --profile test up -d --wait --wait-timeout 90 postgres-test redis
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.13"
+
+      - name: Install dependencies
+        working-directory: backend
+        run: uv sync --locked
+
+      - name: Ruff lint
+        working-directory: backend
+        run: uv run --locked ruff check .
+
+      - name: Ruff format check
+        working-directory: backend
+        run: uv run --locked ruff format --check .
+
+      # backend/.env.example's values are public and safe to commit; no
+      # PostgreSQL connection is required for a plain system check.
+      - name: Django system check (development settings)
+        working-directory: backend
+        run: uv run --locked --env-file .env.example python manage.py check
+
+      - name: Django system check (isolated test settings)
+        working-directory: backend
+        run: uv run --locked python manage.py check --settings=config.settings_test
+
+      - name: Migration drift check
+        working-directory: backend
+        run: uv run --locked python manage.py makemigrations --check --dry-run --settings=config.settings_test
+
+      - name: Tests (PostgreSQL + pgvector)
+        working-directory: backend
+        run: uv run --locked pytest
+
+      - name: Stop disposable services
+        if: always()
+        run: docker compose --env-file backend/.env.example --profile test down --volumes
+
+  worker-smoke:
+    name: worker-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate Compose configuration
+        run: docker compose --env-file backend/.env.example config --quiet
+
+      - name: Start disposable PostgreSQL/pgvector and Redis
+        run: docker compose --env-file backend/.env.example --profile test up -d --wait --wait-timeout 90 postgres-test redis
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.13"
+
+      - name: Install dependencies
+        working-directory: backend
+        run: uv sync --locked
+
+      # A real, separately running worker process — not eager/local task
+      # execution — consuming the isolated test settings' Redis broker.
+      - name: Start a real Celery worker (isolated test settings)
+        working-directory: backend
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings_test
+        run: |
+          nohup uv run --locked celery -A config worker --loglevel=INFO --concurrency=2 > worker.log 2>&1 &
+          echo $! > worker.pid
+
+      - name: Wait for the worker to be ready (bounded)
+        working-directory: backend
+        run: |
+          for _ in $(seq 1 30); do
+            grep -q "ready\." worker.log 2>/dev/null && exit 0
+            sleep 1
+          done
+          echo "::error::Worker did not become ready within 30s"
+          cat worker.log
+          exit 1
+
+      # backend/README.md's "Automated real-broker smoke check": bounded by
+      # the test's own 10s per-call result timeout (tests/test_celery_smoke.py).
+      - name: Real-broker smoke check (separate worker process)
+        working-directory: backend
+        run: uv run --locked pytest -m celery_smoke
+
+      - name: Show worker log
+        if: always()
+        working-directory: backend
+        run: cat worker.log || true
+
+      - name: Stop the worker
+        if: always()
+        working-directory: backend
+        run: kill "$(cat worker.pid)" 2>/dev/null || true
+
+      - name: Stop disposable services
+        if: always()
+        run: docker compose --env-file backend/.env.example --profile test down --volumes
+
+  mobile:
+    name: mobile
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: mobile/.nvmrc
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install dependencies (lockfile-only)
+        working-directory: mobile
+        run: npm ci
+
+      - name: Expo project health check
+        working-directory: mobile
+        run: npx expo-doctor
+
+      - name: ESLint
+        working-directory: mobile
+        run: npm run lint
+
+      - name: Prettier format check
+        working-directory: mobile
+        run: npm run format:check
+
+      - name: TypeScript check
+        working-directory: mobile
+        run: npm run typecheck
+
+      - name: Tests (non-interactive)
+        working-directory: mobile
+        run: npm run test:ci

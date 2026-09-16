@@ -454,8 +454,34 @@ Major architectural and domain decisions are documented as ADRs.
 | [ADR-0006](docs/adr/0006-opinion-not-equal-perspective.md) | Opinion != Perspective |
 | [ADR-0007](docs/adr/0007-pulse-counts-unique-users.md) | Pulse Counts Unique Users |
 | [ADR-0008](docs/adr/0008-recommend-stories-not-truth.md) | Recommendation Personalizes Discovery, Not Truth |
+| [ADR-0009](docs/adr/0009-jwt-mobile-authentication.md) | JWT Bearer Authentication for the Mobile API |
 
 ADRs describe **why** these decisions were made, which alternatives were considered and the conditions under which they may be revisited.
+
+---
+
+## Continuous integration
+
+Every pull request and every push to `master` runs three GitHub Actions
+checks, defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+and reusing the same commands documented in
+[`backend/README.md`](backend/README.md) and
+[`mobile/README.md`](mobile/README.md):
+
+| Check name | What it runs |
+| --- | --- |
+| `backend` | Ruff lint/format, Django system checks (dev and isolated test settings), migration-drift check, and the full pytest suite against a real disposable PostgreSQL/pgvector and Redis |
+| `worker-smoke` | Compose configuration validation, then the real-broker Celery smoke check (`pytest -m celery_smoke`) against a separately running worker process, not eager/local execution |
+| `mobile` | `expo-doctor`, ESLint, Prettier, TypeScript and the Jest suite, from the committed lockfile |
+
+These are the exact names to reference from **Settings → Branches → Branch
+protection rules → Require status checks to pass** when enabling required
+checks on `master` — a repository-settings change this workflow itself
+never makes. All three run with `permissions: contents: read`, use only
+disposable local services and the repository's own public example
+configuration (no repository secrets, no paid service), and are bounded by
+a per-job `timeout-minutes` plus each step's own internal bounds (Compose
+`--wait-timeout`, the smoke test's own per-call result timeout).
 
 ---
 
