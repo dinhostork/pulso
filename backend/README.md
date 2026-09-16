@@ -230,3 +230,76 @@ PostgreSQL to verify applied migration history. Health endpoints, authentication
 API, workers, mobile, semantic features and CI remain separate issues.
 
 See [module boundaries](../docs/architecture/module-boundaries.md).
+
+## Backend quality and isolated tests
+
+`uv sync --locked` installs the `dev` group with Ruff, pytest and pytest-django.
+The development Docker image intentionally uses `--no-dev`; run the quality
+commands on the host using the project's uv environment. Future CI can reuse the
+same commands. No paid account or external provider credentials are needed.
+
+Tests use a **separate PostgreSQL instance**, `postgres-test`, with the same
+pinned pgvector image as development. It is opt-in through the `test` profile,
+uses disposable tmpfs storage, and never mounts `postgres_data`. It starts only
+when explicitly requested. Its public credentials belong solely to this instance.
+
+From the repository root:
+
+```bash
+# Uses public examples for Compose interpolation; does not start the dev services.
+docker compose --env-file backend/.env.example --profile test up -d --wait --wait-timeout 90 postgres-test
+cd backend
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked python manage.py check --settings=config.settings_test
+uv run --locked python manage.py makemigrations --check --dry-run --settings=config.settings_test
+uv run --locked pytest
+```
+
+As with the development stack, unset conflicting exported Compose variables
+before loading the example file. The test service's database name, username and
+password are fixed and independent of those development variables.
+
+The default host test port is **55433**. To avoid a port conflict, set
+`TEST_POSTGRES_PORT` to the same unused port for both Compose and pytest.
+`TEST_POSTGRES_HOST` defaults to `127.0.0.1`; `localhost` and `postgres-test` are
+also accepted for local/Compose execution. The container itself listens on 5432.
+
+`config.settings_test` imports shared application wiring from `config.common`,
+without loading development environment variables or credentials. pytest creates
+`test_pulso`, runs real migrations (including `database.0001_enable_vector`), and
+drops that database after the session. The service's maintenance database is
+`pulso_tests`. No manual SQL or pre-created test schema is required.
+
+The root backend `conftest.py` rejects alternate settings, development database
+names/credentials, mirrors and `--no-migrations` before test database setup.
+Use the standard commands above; the guard protects against configuration
+mistakes, not arbitrary Python code intentionally modifying connections.
+
+Tests verify account persistence, password hashing and validation, username
+uniqueness, automatic vector extension setup and numeric distance/ordering in
+PostgreSQL. Run `uv run --locked pytest` twice to verify repeated creation and
+teardown; no `--reuse-db` flag is enabled by default.
+
+To apply formatting intentionally:
+
+```bash
+uv run --locked ruff format .
+```
+
+Lint, formatting, migration drift and failing tests return nonzero exit codes.
+Ruff includes existing migration files; their formatting changes do not change
+schema operations. Authentication transport and product behavior remain outside
+this issue.
+
+To stop and remove **only the disposable test service**, from the repository root:
+
+```bash
+docker compose --env-file backend/.env.example --profile test stop postgres-test
+docker compose --env-file backend/.env.example --profile test rm -f postgres-test
+```
+
+This discards test data held in tmpfs and leaves the development database and its
+persistent volume intact. For an isolated validation project, use the same `-p`
+project name on every Compose command.

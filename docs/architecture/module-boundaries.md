@@ -9,7 +9,7 @@ independent deployable services. This maps
 
 | Path | Responsibility |
 | --- | --- |
-| `backend/config/` | Environment validation, Django settings, URL composition and ASGI/WSGI entry points |
+| `backend/config/` | Shared application wiring (`common`), separate development/test settings, URL composition and ASGI/WSGI entry points |
 | `backend/api/` | HTTP route registry; currently has no endpoints |
 | `backend/accounts/` | Account identity, Django model integration and initial migration |
 | `backend/database/` | Shared PostgreSQL extension migration; no product models |
@@ -84,3 +84,10 @@ invoke application services, dispatch after successful database commit where
 needed, and account for repeat execution. Redis and task-result metadata are not
 authoritative domain storage. Worker infrastructure belongs to issue #4 and is
 not implemented by this bootstrap.
+
+## Test isolation
+
+The opt-in `postgres-test` Compose service is a disposable PostgreSQL/pgvector
+instance, separate from the development database and volume. pytest-django
+applies the same migrations in `test_pulso` and destroys it after each default
+session. This verifies persistence without creating additional domain modules.

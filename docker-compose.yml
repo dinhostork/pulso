@@ -37,5 +37,24 @@ services:
       retries: 30
       start_period: 10s
 
+  postgres-test:
+    profiles: ["test"]
+    image: pgvector/pgvector:0.8.6-pg17-bookworm@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f
+    environment:
+      POSTGRES_DB: pulso_tests
+      POSTGRES_USER: pulso_tests
+      POSTGRES_PASSWORD: local-only-pulso-tests
+    ports:
+      - "127.0.0.1:${TEST_POSTGRES_PORT:-55433}:5432"
+    # Separate instance and storage: never mount the development volume here.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U pulso_tests -d pulso_tests"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
 volumes:
   postgres_data:
