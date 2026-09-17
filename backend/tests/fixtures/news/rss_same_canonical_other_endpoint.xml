@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><title>News mirror</title><link>https://news.example/</link><description>Second endpoint of the same Source</description><language>en-US</language>
+  <item><guid isPermaLink="false">mirror-1</guid><link>https://news.example/story/1</link><title>Story 1</title><description><![CDATA[<p>Summary 1</p>]]></description><content:encoded><![CDATA[<p>Body 1</p>]]></content:encoded><pubDate>Wed, 16 Sep 2026 07:28:00 GMT</pubDate></item>
+  <item><guid isPermaLink="false">mirror-2</guid><link>https://news.example/story/2</link><title>Story 2</title><description><![CDATA[<p>Summary 2</p>]]></description><content:encoded><![CDATA[<p>Body 2</p>]]></content:encoded><pubDate>Wed, 16 Sep 2026 07:28:00 GMT</pubDate></item>
+</channel></rss>

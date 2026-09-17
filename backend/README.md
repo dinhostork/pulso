@@ -75,8 +75,10 @@ this setting and sends no credential header.
 | `NEWS_FETCH_READ_TIMEOUT_SECONDS` | 15 | Per-read timeout. |
 | `NEWS_FETCH_WRITE_TIMEOUT_SECONDS` | 5 | Write timeout. |
 | `NEWS_FETCH_POOL_TIMEOUT_SECONDS` | 5 | Connection-pool timeout. |
+| `NEWS_CONTENT_FINGERPRINT_MIN_CHARS` | 200 | Minimum normalized fingerprint-input characters before exact content equality links a republication (ADR-0010). Shorter material always creates a separate Article. |
 
-The last six settings are fixed application constants, not environment knobs.
+The last six fetch settings are fixed application constants, not environment
+knobs, and so is the fingerprint threshold.
 `config.settings_test` enables the private-network exception for the future
 loopback fixture server (#21); policy tests explicitly exercise both flag
 values with fake DNS. The override does not disable scheme, redirect, size,
@@ -87,18 +89,35 @@ remains a known risk; no IP pinning is implemented here.
 ## News ingestion
 
 Each endpoint fetch creates an `IngestionRun`: `RUNNING` while executing, then
-`SUCCEEDED`, `PARTIAL`, `NO_CHANGE`, or `FAILED`. Its counters distinguish
-received and rejected items, new/changed/unchanged raw revisions, successful
-processing-stub invocations, and isolated processing failures. Expected fetch
-failures record safe error kind, HTTP status, and whether a future caller may
-retry them.
+`SUCCEEDED`, `PARTIAL`, `NO_CHANGE`, or `FAILED`. Expected fetch failures
+record safe error kind, HTTP status, and whether a future caller may retry
+them. Its counters are:
+
+| Counter | Meaning |
+| --- | --- |
+| `items_received` | Items the adapter returned, including the ones it rejected. |
+| `items_rejected` | Adapter/intake rejections: unparseable entries, missing identity, and items over the per-run limit. |
+| `raw_created` / `raw_changed` / `raw_unchanged` | New raw revisions, superseding revisions, and deliveries whose payload hash already existed. |
+| `items_processed` | Processing invocations that returned without raising. |
+| `items_failed` | Processing invocations isolated after an unexpected exception. |
+| `identity_duplicates` | Revisions that resolved to an existing Article with nothing to change (ADR-0010). |
+| `content_duplicates` | New Articles linked with `duplicate_of` to an earlier Article with the same content fingerprint. |
+| `raw_rejected` | RawArticles rejected while processing, including normalization rejections. Distinct from `items_rejected`. |
+| `source_identity_conflicts` | Rejected deliveries whose canonical URL is already owned by another Source. |
+
+A run with any `items_rejected`, `items_failed` or `raw_rejected` finishes
+`PARTIAL`. A cross-Source canonical URL conflict never changes the existing
+Article: the delivery is kept as a rejected `RawArticle` linked to that Article
+for review, and one WARNING carries both Source slugs, both endpoint ids and
+the canonical URL with no title or body text.
 
 One run accepts at most 500 fetched items. Each stored `RawArticle.payload` is
 valid canonical JSON capped at 256 KiB; oversized content and metadata are
 reduced deterministically before its hash is calculated. Pending rows from an
 earlier interrupted run are replayed without changing their receipt provenance.
-This application service does not schedule work, execute retries, or create
-normalized Articles; later worker and normalization issues own those steps.
+Each pending row is then normalized and deduplicated in place. This application
+service does not schedule work or execute retries; the worker orchestration
+issue owns those steps.
 
 ## Local Compose stack
 

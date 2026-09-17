@@ -14,6 +14,7 @@ from news.application.ports import (
     FetchResult,
     RejectedItem,
 )
+from news.application.process import ProcessOutcome, ProcessState
 from news.domain.fingerprints import payload_hash
 from news.models import Article, IngestionRun, RawArticle, Source, SourceEndpoint
 
@@ -147,6 +148,14 @@ def test_processing_failure_and_replay(endpoint, monkeypatch):
         called.append(pk)
         if pk == old.pk:
             raise RuntimeError("secret")
+        # The loop counts dedup outcomes from this value (#18), so the double
+        # must return one rather than None.
+        return ProcessOutcome(
+            raw_id=pk,
+            state=ProcessState.PROCESSED,
+            outcome=RawArticle.Outcome.ARTICLE_CREATED,
+            article_id=None,
+        )
 
     monkeypatch.setattr("news.application.ingest.process_raw_article", process)
     summary = run(endpoint, monkeypatch, FetchResult(items=(item("new"),)))

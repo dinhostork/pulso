@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><title>Syndicating paper</title><link>https://syndicate.example/</link><description>Republication of the wire report under its own URL</description><language>en-US</language>
+  <item><guid isPermaLink="false">syndicated-1</guid><link>https://syndicate.example/wire/central-bank-holds-rate</link><title>Central bank holds the benchmark rate</title><content:encoded><![CDATA[<p>The central bank left its benchmark interest rate unchanged on Wednesday, holding borrowing costs steady for the third consecutive meeting.</p><p>Policymakers said inflation had continued to ease but remained above the official target, and that further evidence of sustained disinflation would be required before any reduction.</p>]]></content:encoded><pubDate>Wed, 16 Sep 2026 07:28:00 GMT</pubDate></item>
+</channel></rss>

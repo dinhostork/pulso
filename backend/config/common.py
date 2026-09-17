@@ -96,3 +96,9 @@ NEWS_FETCH_WRITE_TIMEOUT_SECONDS = 5
 NEWS_FETCH_POOL_TIMEOUT_SECONDS = 5
 NEWS_INGEST_MAX_ITEMS_PER_RUN = 500
 NEWS_INGEST_MAX_PAYLOAD_BYTES = 256 * 1024
+
+# Minimum normalized fingerprint-input length that makes exact content equality
+# usable evidence of a republication (ADR-0010 Tier 2). Below it, short generic
+# titles with no body would link unrelated publications; a fixed application
+# constant, not an environment knob.
+NEWS_CONTENT_FINGERPRINT_MIN_CHARS = 200

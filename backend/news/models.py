@@ -128,6 +128,13 @@ class IngestionRun(models.Model):
     raw_changed = models.PositiveIntegerField(default=0)
     items_processed = models.PositiveIntegerField(default=0)
     items_failed = models.PositiveIntegerField(default=0)
+    # Deduplication results of the processing step (ADR-0010). `raw_rejected`
+    # counts RawArticles rejected while processing, which is distinct from
+    # `items_rejected` (adapter/intake rejections).
+    identity_duplicates = models.PositiveIntegerField(default=0)
+    content_duplicates = models.PositiveIntegerField(default=0)
+    raw_rejected = models.PositiveIntegerField(default=0)
+    source_identity_conflicts = models.PositiveIntegerField(default=0)
     duration_ms = models.PositiveBigIntegerField(null=True, blank=True)
 
     class Meta:
@@ -148,6 +155,10 @@ class IngestionRun(models.Model):
                     & Q(raw_changed__gte=0)
                     & Q(items_processed__gte=0)
                     & Q(items_failed__gte=0)
+                    & Q(identity_duplicates__gte=0)
+                    & Q(content_duplicates__gte=0)
+                    & Q(raw_rejected__gte=0)
+                    & Q(source_identity_conflicts__gte=0)
                 ),
                 name="news_run_counters_nonnegative",
             ),

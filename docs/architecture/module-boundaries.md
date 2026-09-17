@@ -15,7 +15,7 @@ independent deployable services. This maps
 | `backend/accounts/` | Account identity, Django model integration, initial migration and JWT login/logout/refresh/current-user endpoints (issue #6, ADR-0009) |
 | `backend/database/` | Shared PostgreSQL extension migration; no product models |
 | `backend/diagnostics/` | Temporary Celery/Redis infrastructure diagnostic (issue #4); no product models or domain rules |
-| `backend/news/` | News-owned Source, SourceEndpoint, RawArticle and Article persistence; `application/`, `domain/` and `adapters/` define boundaries for upcoming use cases |
+| `backend/news/` | News-owned Source, SourceEndpoint, RawArticle and Article persistence; `adapters/` fetch and parse feeds, `application/` runs ingestion and per-revision processing, `domain/` holds pure canonicalization, normalization and deduplication rules |
 
 Accounts uses Django's `AbstractUser` and a database-generated `BigAutoField`
 primary key. Future relationships use `settings.AUTH_USER_MODEL` in model fields
@@ -27,11 +27,15 @@ there is still no product use case beyond authenticating an existing
 account, so no additional indirection was introduced for its own sake. No
 profile, position or registration contract is introduced.
 
-News now has a module-local `application/` package as the boundary for its
-upcoming ingestion use case. Its package is empty until that use case is
-implemented; no speculative services or ports have been added. The route
-registry is the integration point for future HTTP adapters; it must not
-accumulate domain rules.
+News's module-local `application/` package is the boundary for its ingestion
+use cases: `ingest.py` fetches an endpoint and stores raw revisions, and
+`process.py` normalizes one revision and applies the deduplication decision.
+The rules those services coordinate stay in `domain/` as pure functions —
+`urls.py`, `fingerprints.py`, `identity.py`, `normalization.py` and `dedup.py`
+import no Django, no models and no settings. Story behavior, Celery tasks and
+operator commands are not implemented here. The route registry is the
+integration point for future HTTP adapters; it must not accumulate domain
+rules.
 
 ## Dependency direction
 
@@ -58,7 +62,7 @@ interface rather than another module's internal models.
 | Module | Owns | Current state |
 | --- | --- | --- |
 | Accounts | Stable user identity and account authentication foundation | User model plus JWT login/logout/refresh/current-user endpoints ([ADR-0009](../adr/0009-jwt-mobile-authentication.md)); no registration or profile fields |
-| News | Source publications, Articles, Stories and source-grounded factual synthesis | Source, SourceEndpoint, RawArticle and Article persistence; Story planned |
+| News | Source publications, Articles, Stories and source-grounded factual synthesis | Persistence plus RSS/JSON Feed ingestion, deterministic normalization and deterministic deduplication ([ADR-0010](../adr/0010-article-identity-and-deduplication.md)); Story planned |
 | Opinion | Human Opinions, declared positions, derived Perspectives and Pulse | Planned; no package or models |
 | Recommendation | Discovery ranking, interests and ranking signals | Planned; no package or models |
 | Moderation | Moderation decisions and eligibility policies, coordinated with content owners | Planned; policies and interfaces remain undecided |
@@ -84,6 +88,12 @@ These ownership boundaries preserve the accepted decisions:
 - [ADR-0008](../adr/0008-recommend-stories-not-truth.md): Recommendation consumes
   domain data to rank discovery; it cannot rewrite Story facts, source evidence,
   Perspectives or Pulse state.
+- [ADR-0010](../adr/0010-article-identity-and-deduplication.md): News owns
+  publication identity. A canonical URL is globally unique and belongs to one
+  Source; another Source's delivery of it is recorded as a conflict and never
+  re-attributes the Article. Exact-content republications stay separate
+  Articles linked with `duplicate_of`. Deduplication is not Story clustering,
+  and no semantic similarity takes part in it.
 
 ## Background execution
 

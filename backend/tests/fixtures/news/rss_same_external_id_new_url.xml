@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><title>News</title><link>https://news.example/</link><description>Same provider id under a new link</description><language>en-US</language>
+  <item><guid isPermaLink="false">story-1</guid><link>https://news.example/story/1-updated</link><title>Story 1</title><description><![CDATA[<p>Summary 1</p>]]></description><content:encoded><![CDATA[<p>Body 1</p>]]></content:encoded><pubDate>Wed, 16 Sep 2026 07:28:00 GMT</pubDate></item>
+</channel></rss>

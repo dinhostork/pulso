@@ -13,7 +13,7 @@ from django.utils import timezone
 
 from news.adapters.http import Fetcher
 from news.application.ports import EndpointFetchRequest, FetchedItem, FetchError
-from news.application.process import process_raw_article
+from news.application.process import ProcessOutcome, ProcessState, process_raw_article
 from news.application.registry import adapter_for
 from news.domain.fingerprints import payload_hash
 from news.domain.identity import ExternalKey, MissingIdentity, external_key
@@ -35,6 +35,10 @@ class RunSummary:
     raw_changed: int
     items_processed: int
     items_failed: int
+    identity_duplicates: int
+    content_duplicates: int
+    raw_rejected: int
+    source_identity_conflicts: int
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -106,6 +110,10 @@ def _summary(run: IngestionRun) -> RunSummary:
         raw_changed=run.raw_changed,
         items_processed=run.items_processed,
         items_failed=run.items_failed,
+        identity_duplicates=run.identity_duplicates,
+        content_duplicates=run.content_duplicates,
+        raw_rejected=run.raw_rejected,
+        source_identity_conflicts=run.source_identity_conflicts,
     )
 
 
@@ -148,6 +156,10 @@ def _finalize(
         "raw_changed",
         "items_processed",
         "items_failed",
+        "identity_duplicates",
+        "content_duplicates",
+        "raw_rejected",
+        "source_identity_conflicts",
     ]
     with transaction.atomic():
         updates = {}
@@ -169,6 +181,11 @@ def _finalize(
             "raw_changed": run.raw_changed,
             "raw_unchanged": run.raw_unchanged,
             "items_failed": run.items_failed,
+            "items_processed": run.items_processed,
+            "identity_duplicates": run.identity_duplicates,
+            "content_duplicates": run.content_duplicates,
+            "raw_rejected": run.raw_rejected,
+            "source_identity_conflicts": run.source_identity_conflicts,
             "duration_ms": run.duration_ms,
         },
     )
@@ -218,6 +235,24 @@ def _persist_item(
         if existing is None:
             raise
         return existing, "unchanged"
+
+
+def _count_processing(run: IngestionRun, outcome: ProcessOutcome) -> None:
+    """Maintain the dedup counters from one processing result (ADR-0010).
+
+    `raw_rejected` covers every RawArticle rejected while processing, including
+    normalization rejections; adapter/intake rejection keeps its own
+    `items_rejected` meaning from #16.
+    """
+
+    if outcome.state is ProcessState.REJECTED:
+        run.raw_rejected += 1
+        if outcome.rejection_reason == RawArticle.Outcome.SOURCE_IDENTITY_CONFLICT:
+            run.source_identity_conflicts += 1
+    if outcome.outcome == RawArticle.Outcome.IDENTITY_DUPLICATE:
+        run.identity_duplicates += 1
+    elif outcome.outcome == RawArticle.Outcome.CONTENT_DUPLICATE:
+        run.content_duplicates += 1
 
 
 def ingest_endpoint(
@@ -326,8 +361,7 @@ def ingest_endpoint(
     )
     for raw_id in pending_ids:
         try:
-            process_raw_article(raw_id)
-            run.items_processed += 1
+            outcome = process_raw_article(raw_id)
         except (
             Exception
         ) as error:  # isolate one processing row; never suppress fetch/intake defects
@@ -340,8 +374,11 @@ def ingest_endpoint(
                     "exception_class": type(error).__name__,
                 },
             )
+            continue
+        run.items_processed += 1
+        _count_processing(run, outcome)
 
-    if run.items_rejected or run.items_failed:
+    if run.items_rejected or run.items_failed or run.raw_rejected:
         status = IngestionRun.Status.PARTIAL
     elif run.raw_created or run.raw_changed:
         status = IngestionRun.Status.SUCCEEDED

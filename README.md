@@ -455,6 +455,7 @@ Major architectural and domain decisions are documented as ADRs.
 | [ADR-0007](docs/adr/0007-pulse-counts-unique-users.md) | Pulse Counts Unique Users |
 | [ADR-0008](docs/adr/0008-recommend-stories-not-truth.md) | Recommendation Personalizes Discovery, Not Truth |
 | [ADR-0009](docs/adr/0009-jwt-mobile-authentication.md) | JWT Bearer Authentication for the Mobile API |
+| [ADR-0010](docs/adr/0010-article-identity-and-deduplication.md) | Article Identity and Deduplication |
 
 ADRs describe **why** these decisions were made, which alternatives were considered and the conditions under which they may be revisited.
 
