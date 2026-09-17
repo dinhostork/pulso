@@ -1,1 +1,1 @@
-"""Future framework-independent publication identity rules."""
+"""Framework-independent publication identity and fingerprint rules."""
