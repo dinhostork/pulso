@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="pt-BR"><title>Atom News</title><id>urn:feed:atom</id><updated>2015-10-21T07:28:00Z</updated>
+<entry xml:lang="fr"><id>urn:story:atom-1</id><title>Atom One</title><updated>2015-10-21T07:28:00Z</updated><published>2015-10-20T06:00:00Z</published><link rel="self" href="https://news.example/api/1"/><link rel="alternate" type="text/html" href="https://news.example/story/atom-1"/><summary type="html">&lt;p&gt;Résumé&lt;/p&gt;</summary><content type="html">&lt;p&gt;Body one&lt;/p&gt;</content><author><name>Author One</name></author></entry>
+<entry><id>urn:story:atom-2</id><title>Atom Two</title><updated>2015-10-21T07:28:00Z</updated><link rel="alternate" href="https://news.example/story/atom-2"/><content type="text">Body two</content></entry>
+</feed>
