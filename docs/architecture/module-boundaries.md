@@ -15,6 +15,7 @@ independent deployable services. This maps
 | `backend/accounts/` | Account identity, Django model integration, initial migration and JWT login/logout/refresh/current-user endpoints (issue #6, ADR-0009) |
 | `backend/database/` | Shared PostgreSQL extension migration; no product models |
 | `backend/diagnostics/` | Temporary Celery/Redis infrastructure diagnostic (issue #4); no product models or domain rules |
+| `backend/news/` | News-owned Source, SourceEndpoint, RawArticle and Article persistence; `application/`, `domain/` and `adapters/` define boundaries for upcoming use cases |
 
 Accounts uses Django's `AbstractUser` and a database-generated `BigAutoField`
 primary key. Future relationships use `settings.AUTH_USER_MODEL` in model fields
@@ -26,10 +27,11 @@ there is still no product use case beyond authenticating an existing
 account, so no additional indirection was introduced for its own sake. No
 profile, position or registration contract is introduced.
 
-There is no application use case to implement yet, so no empty application,
-port or service packages are created. Add module-local application services when
-real use cases arrive. The route registry is the integration point for future
-HTTP adapters; it must not accumulate domain rules.
+News now has a module-local `application/` package as the boundary for its
+upcoming ingestion use case. Its package is empty until that use case is
+implemented; no speculative services or ports have been added. The route
+registry is the integration point for future HTTP adapters; it must not
+accumulate domain rules.
 
 ## Dependency direction
 
@@ -56,7 +58,7 @@ interface rather than another module's internal models.
 | Module | Owns | Current state |
 | --- | --- | --- |
 | Accounts | Stable user identity and account authentication foundation | User model plus JWT login/logout/refresh/current-user endpoints ([ADR-0009](../adr/0009-jwt-mobile-authentication.md)); no registration or profile fields |
-| News | Source publications, Articles, Stories and source-grounded factual synthesis | Planned; no package or models |
+| News | Source publications, Articles, Stories and source-grounded factual synthesis | Source, SourceEndpoint, RawArticle and Article persistence; Story planned |
 | Opinion | Human Opinions, declared positions, derived Perspectives and Pulse | Planned; no package or models |
 | Recommendation | Discovery ranking, interests and ranking signals | Planned; no package or models |
 | Moderation | Moderation decisions and eligibility policies, coordinated with content owners | Planned; policies and interfaces remain undecided |
