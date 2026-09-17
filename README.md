@@ -93,7 +93,9 @@ These engines are logical domain components of the same application. They are **
 
 ## News Engine
 
-The News Engine turns individual publications into event-level Stories.
+The planned News Engine connects publications to event-level Stories. The
+implemented v0.2 News Core currently stops at Article; Story matching,
+embeddings and enrichment begin in v0.3. See the [News Core architecture](docs/architecture/news-core.md).
 
 ```mermaid
 flowchart LR
@@ -539,15 +541,10 @@ Publish
 
 ## Project status
 
-> **Current stage: Product design and architecture**
+> **Current stage: News Core implemented; Story Engine next.**
 
-Pulso is currently defining and validating:
-
-- domain boundaries;
-- architectural decisions;
-- UX flows;
-- MVP scope;
-- infrastructure foundations.
+The Foundation and News Core are implemented and tested. Story Engine is the
+next architecture milestone; product and UX work continues to evolve.
 
 The wireframes represent the current product hypothesis and are not final visual design.
 
@@ -557,7 +554,7 @@ The repository should not be interpreted as a production-ready application at th
 
 ## Roadmap
 
-### Phase 0 — Foundation
+### Phase 0 — Foundation (v0.1.0)
 
 - repository structure;
 - backend bootstrap;
@@ -569,15 +566,16 @@ The repository should not be interpreted as a production-ready application at th
 - CI;
 - linting and tests.
 
-### Phase 1 — News Core
+### Phase 1 — News Core (v0.2.0)
 
 - Source ingestion;
-- RSS/API adapters;
+- RSS/Atom and JSON Feed adapters;
+- extensible ingestion adapter boundary;
 - RawArticle persistence;
 - Article normalization;
 - deduplication.
 
-### Phase 2 — Story Engine
+### Phase 2 — Story Engine (v0.3.0)
 
 - embeddings;
 - semantic similarity;

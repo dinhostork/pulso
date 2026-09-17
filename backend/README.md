@@ -53,7 +53,12 @@ and CSRF cookies require HTTPS. Generate a secret key before any deployment;
 the example values are not deployment credentials. These settings are a
 bootstrap, not a complete production deployment configuration.
 
-## News ingestion settings
+## News ingestion
+
+See the [News Core architecture](../docs/architecture/news-core.md) for the
+model, lifecycle and boundaries.
+
+### Configuration
 
 News source endpoints are validated against all resolved IP addresses when
 saved, and the shared HTTP fetcher checks each request and redirect again.
@@ -79,14 +84,13 @@ this setting and sends no credential header.
 
 The last six fetch settings are fixed application constants, not environment
 knobs, and so is the fingerprint threshold.
-`config.settings_test` enables the private-network exception for the future
-loopback fixture server (#21); policy tests explicitly exercise both flag
-values with fake DNS. The override does not disable scheme, redirect, size,
+`config.settings_test` enables the private-network exception for the
+loopback fixture server; policy tests exercise both flag values with fake DNS. The override does not disable scheme, redirect, size,
 media-type or timeout checks. DNS answers are checked before connecting, but
 the HTTP client resolves again at connection time. DNS rebinding in that gap
 remains a known risk; no IP pinning is implemented here.
 
-## News ingestion
+### Pipeline
 
 Each endpoint fetch creates an `IngestionRun`: `RUNNING` while executing, then
 `SUCCEEDED`, `PARTIAL`, `NO_CHANGE`, or `FAILED`. Expected fetch failures
@@ -115,11 +119,10 @@ One run accepts at most 500 fetched items. Each stored `RawArticle.payload` is
 valid canonical JSON capped at 256 KiB; oversized content and metadata are
 reduced deterministically before its hash is calculated. Pending rows from an
 earlier interrupted run are replayed without changing their receipt provenance.
-Each pending row is then normalized and deduplicated in place. This application
-service does not schedule work or execute retries; the worker orchestration
-issue owns those steps.
+Each pending row is then normalized and deduplicated in place. The application
+service does not schedule work or execute retries; `news.tasks` owns those steps.
 
-## News ingestion orchestration
+### Worker and Beat
 
 Ingestion runs through the existing Celery worker and the optional Beat
 scheduler (ADR-0001, ADR-0005). `news/tasks.py` holds only orchestration: each
@@ -165,9 +168,9 @@ only, never payloads, headers or content.
 
 | Setting | Default | Behavior |
 | --- | --- | --- |
-| `NEWS_INGESTION_ENABLED` | `true` | Gates both News Beat entries. Independent of `CELERY_DIAGNOSTIC_BEAT_ENABLED`; neither flag affects the other's entries. |
+| `NEWS_INGESTION_ENABLED` | `true` | Gates all three News Beat entries. Independent of `CELERY_DIAGNOSTIC_BEAT_ENABLED`; neither flag affects the other's entries. |
 | `NEWS_POLL_DISPATCH_INTERVAL_SECONDS` | `300` | How often Beat runs `poll_due_endpoints`. Must be a positive integer; `0`, negatives and non-integers are rejected with `ImproperlyConfigured`. |
-| `LOG_LEVEL` | `INFO` | Level of the `pulso` JSON log tree (see [observability](#news-ingestion-observability-and-retention)); Django and Celery loggers are unaffected. |
+| `LOG_LEVEL` | `INFO` | Level of the `pulso` JSON log tree (see [observability](#observability-and-run-history)); Django and Celery loggers are unaffected. |
 
 With the defaults, `CELERY_BEAT_SCHEDULE` contains `news-poll-due-endpoints`
 (every `NEWS_POLL_DISPATCH_INTERVAL_SECONDS`), `news-reconcile-pending`
@@ -262,7 +265,7 @@ python manage.py news_endpoint list
 python manage.py news_ingest --endpoint <id>
 ```
 
-## News ingestion observability and retention
+### Observability and run history
 
 Ingestion is diagnosable from two places only: the `IngestionRun`/`RawArticle`
 rows in PostgreSQL and the structured logs. There is no metrics platform in
@@ -481,11 +484,10 @@ container. Source is bind-mounted at `/app` for reload; dependencies live at
 Dockerfile changes. `.dockerignore` keeps host environments, secrets and caches
 out of image build context.
 
-There are no application HTTP endpoints yet. With the example `DEBUG=true`
-and an empty route registry, Django serves its installation page with **200** at
-`http://127.0.0.1:8000/api/`; with debug disabled, an unmatched path returns **404**.
-This can verify the HTTP listener, but it is not a health API. Startup and
-database checks are separate.
+The backend exposes `/health/live`, `/health/ready` and JWT authentication
+under `/api/auth/`. News ingestion has no HTTP operator API; Celery/Beat and
+`manage.py` commands drive it. Check `/health/live` to verify the HTTP listener
+and `/health/ready` for required dependencies.
 
 ### Schema ownership and pgvector
 
@@ -665,7 +667,7 @@ harmless diagnostic task; it introduces no product task.
 | --- | --- |
 | `REDIS_HOST`, `REDIS_PORT` | Required, same pattern as the `POSTGRES_*` settings |
 | `CELERY_DIAGNOSTIC_BEAT_ENABLED` | Optional, defaults to `false`; only toggle enabling `diagnostics.tasks.diagnostic_ping` on a 30s Beat schedule |
-| `NEWS_INGESTION_ENABLED` | Optional, defaults to `true`; gates the two News Beat entries (see [News ingestion orchestration](#news-ingestion-orchestration)) |
+| `NEWS_INGESTION_ENABLED` | Optional, defaults to `true`; gates the three News Beat entries (see [Worker and Beat](#worker-and-beat)) |
 | `NEWS_POLL_DISPATCH_INTERVAL_SECONDS` | Optional, defaults to `300`; positive integer interval for `news-poll-due-endpoints` |
 
 `REDIS_PORT` defaults to **6399** on the host to avoid colliding with a

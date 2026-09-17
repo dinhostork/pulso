@@ -10,12 +10,12 @@ independent deployable services. This maps
 | Path | Responsibility |
 | --- | --- |
 | `backend/config/` | Shared application wiring (`common`), separate development/test settings, URL composition and ASGI/WSGI entry points |
-| `backend/api/` | HTTP route registry; currently has no endpoints |
+| `backend/api/` | Product HTTP route registry; currently mounts authentication routes under `/api/auth/` |
 | `backend/health/` | Unauthenticated liveness/readiness endpoints and bounded dependency probes (issue #5); not part of the product API |
 | `backend/accounts/` | Account identity, Django model integration, initial migration and JWT login/logout/refresh/current-user endpoints (issue #6, ADR-0009) |
 | `backend/database/` | Shared PostgreSQL extension migration; no product models |
 | `backend/diagnostics/` | Temporary Celery/Redis infrastructure diagnostic (issue #4); no product models or domain rules |
-| `backend/news/` | News-owned Source, SourceEndpoint, RawArticle and Article persistence; `adapters/` fetch and parse feeds, `application/` runs ingestion and per-revision processing, `domain/` holds pure canonicalization, normalization and deduplication rules |
+| `backend/news/` | News-owned Source, SourceEndpoint, IngestionRun, RawArticle and Article persistence; `adapters/` fetch and parse feeds, `application/` runs ingestion, processing and operations, `domain/` holds pure rules, `tasks.py` orchestrates Celery work, `logging.py` supplies context, and management commands provide the operator surface. See the [News Core architecture](news-core.md). |
 
 Accounts uses Django's `AbstractUser` and a database-generated `BigAutoField`
 primary key. Future relationships use `settings.AUTH_USER_MODEL` in model fields
@@ -32,9 +32,10 @@ use cases: `ingest.py` fetches an endpoint and stores raw revisions, and
 `process.py` normalizes one revision and applies the deduplication decision.
 The rules those services coordinate stay in `domain/` as pure functions —
 `urls.py`, `fingerprints.py`, `identity.py`, `normalization.py` and `dedup.py`
-import no Django, no models and no settings. Story behavior, Celery tasks and
-operator commands are not implemented here. The route registry is the
-integration point for future HTTP adapters; it must not accumulate domain
+import no Django, no models and no settings. `tasks.py` implements Celery
+orchestration, `management/commands/` provides operator commands, and
+`logging.py` supplies structured context; Story behavior is future work. The
+route registry is the integration point for future HTTP adapters; it must not accumulate domain
 rules.
 
 ## Dependency direction
@@ -106,8 +107,8 @@ for repeat execution: `CELERY_TASK_ACKS_LATE`/`CELERY_TASK_REJECT_ON_WORKER_LOST
 are both enabled, so persistent task effects must be idempotent. Redis and
 task-result metadata are not authoritative domain storage. `diagnostics/` is
 the issue #4 diagnostic app proving this infrastructure with a harmless task;
-it introduces no product task, queue topology or schedule. See the worker
-infrastructure section of [backend/README.md](../../backend/README.md).
+News adds product tasks and Beat schedules; `diagnostics/` itself adds no product
+behavior. See the worker infrastructure section of [backend/README.md](../../backend/README.md).
 
 ## Test isolation
 
