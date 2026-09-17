@@ -168,6 +168,32 @@ docker compose --env-file backend/.env --profile beat stop beat
 docker compose --env-file backend/.env --profile beat rm -f beat
 ```
 
+Enabling Beat with `NEWS_INGESTION_ENABLED=true` (its default) also schedules
+`news-poll-due-endpoints` and `news-reconcile-pending`; with no Sources
+configured both are no-ops. See the
+[News ingestion orchestration](../backend/README.md#news-ingestion-orchestration)
+section for the schedule, retry policy and operator commands.
+
+### Optional: ingest a demo source (requires external network)
+
+Not part of setup verification: this step fetches third-party feeds, so it
+needs outbound internet and depends on endpoints Pulso does not control. The
+automated tests never use them.
+
+```bash
+docker compose --env-file backend/.env run --rm backend \
+    python manage.py loaddata news/fixtures/demo_sources.json
+docker compose --env-file backend/.env run --rm backend \
+    python manage.py news_endpoint list
+# Pick an endpoint id from that table:
+docker compose --env-file backend/.env run --rm backend \
+    python manage.py news_ingest --endpoint 9001
+```
+
+Observed: the command prints one `run_id`, a `status` (`SUCCEEDED` on a first
+fetch) and the run's counters, and `news_endpoint list` keeps showing the three
+demo endpoints — two RSS and one JSON Feed.
+
 ### 8. Mobile shell
 
 ```bash
@@ -220,7 +246,7 @@ modulo environment differences like a cold Docker image cache.
 | `cd backend && uv run --locked python manage.py check [--settings=config.settings_test]` | `backend` | Django system checks, dev and isolated test settings |
 | `cd backend && uv run --locked python manage.py makemigrations --check --dry-run --settings=config.settings_test` | `backend` | Migration drift |
 | `cd backend && uv run --locked pytest` | `backend` | Full suite against real PostgreSQL/pgvector + Redis |
-| `cd backend && uv run --locked pytest -m celery_smoke` (needs a real worker running — see [backend/README.md](../backend/README.md#automated-real-broker-smoke-check)) | `worker-smoke` | Real-broker Celery round trip |
+| `cd backend && uv run --locked pytest -m celery_smoke` (needs a real worker running — see [backend/README.md](../backend/README.md#automated-real-broker-smoke-check)) | `worker-smoke` | Real-broker Celery round trip: diagnostic ping and News ingestion |
 | `cd mobile && npx expo-doctor` | `mobile` | Expo/SDK/peer-dependency health |
 | `cd mobile && npm run lint` | `mobile` | ESLint |
 | `cd mobile && npm run format:check` | `mobile` | Prettier |
@@ -262,7 +288,8 @@ side effect that only `expo export` surfaces.
 | `Bind for 127.0.0.1:PORT failed: port is already allocated` | A previous Compose project's container is still using that host port (dev `redis`/`postgres` and the `test` profile share default ports across different Compose *project names*, i.e. different working directories) | `docker ps -a`, stop/remove the conflicting container, or override the port (`POSTGRES_PORT`, `REDIS_PORT`, `TEST_POSTGRES_PORT`, `TEST_REDIS_PORT`) — see backend/README.md's isolated-validation-project pattern |
 | `docker compose ... up --wait` times out | An image pull is slow, or a genuine startup failure | `docker compose --env-file backend/.env logs --tail=50 <service>`; healthchecks fail loud, not silent |
 | `/health/ready` returns 503 | PostgreSQL unreachable/down | Check `docker compose ... logs postgres`; `/health/live` should still be `200` — if it isn't, the process itself is down, not just a dependency |
-| `pytest -m celery_smoke` fails with "No worker consumed the task within 10s" | No worker is running against the same (isolated test) Redis DB | Start one first: `DJANGO_SETTINGS_MODULE=config.settings_test uv run --locked celery -A config worker --loglevel=INFO` |
+| `pytest -m celery_smoke` fails with "No worker consumed the task" | No worker is running against the same (isolated test) Redis DB | Start one first: `DJANGO_SETTINGS_MODULE=config.settings_smoke_worker uv run --locked celery -A config worker --loglevel=INFO` |
+| The News smoke fails with `relation "news_sourceendpoint" does not exist` | The worker was started with `config.settings_test`, so it uses a different database than pytest | Restart it with `DJANGO_SETTINGS_MODULE=config.settings_smoke_worker` (see [backend/README.md](../backend/README.md#automated-real-broker-smoke-check)) |
 | Mobile `expo start` can't reach the backend from an emulator/device | Wrong `EXPO_PUBLIC_API_BASE_URL` for that target | See [mobile/README.md's API base URL table](../mobile/README.md#api-base-url) (`10.0.2.2` for the Android emulator, a LAN IP for a physical device) |
 | `npm ci` / `uv sync --locked` fails on a lockfile mismatch | `package.json`/`pyproject.toml` changed without regenerating the lockfile | `npm install` / `uv lock`, review the diff, commit both together |
 

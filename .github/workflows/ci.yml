@@ -91,11 +91,18 @@ jobs:
         run: uv sync --locked
 
       # A real, separately running worker process — not eager/local task
-      # execution — consuming the isolated test settings' Redis broker.
-      - name: Start a real Celery worker (isolated test settings)
+      # execution — consuming the isolated test settings' Redis broker (DB 1).
+      #
+      # config.settings_smoke_worker is config.settings_test with one change:
+      # the worker connects to `test_pulso`, the database pytest-django creates
+      # for the session, instead of the base `pulso_tests` database. The News
+      # smoke check (#19) asserts rows the worker writes, so both processes must
+      # use the same database; pytest-django applies the migrations there, and
+      # the worker connects lazily on its first task, after that has happened.
+      - name: Start a real Celery worker (isolated smoke-worker settings)
         working-directory: backend
         env:
-          DJANGO_SETTINGS_MODULE: config.settings_test
+          DJANGO_SETTINGS_MODULE: config.settings_smoke_worker
         run: |
           nohup uv run --locked celery -A config worker --loglevel=INFO --concurrency=2 > worker.log 2>&1 &
           echo $! > worker.pid
@@ -112,7 +119,9 @@ jobs:
           exit 1
 
       # backend/README.md's "Automated real-broker smoke check": bounded by
-      # the test's own 10s per-call result timeout (tests/test_celery_smoke.py).
+      # each test's own result timeout (10s for the diagnostic ping, 30s for
+      # News ingestion). Covers both the diagnostic round trip and the full
+      # News path: broker -> separate worker -> loopback HTTP -> PostgreSQL.
       - name: Real-broker smoke check (separate worker process)
         working-directory: backend
         run: uv run --locked pytest -m celery_smoke

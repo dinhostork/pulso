@@ -90,6 +90,10 @@ services:
       REDIS_PORT: "6379"
       NEWS_FETCH_ALLOW_PRIVATE_NETWORKS: ${NEWS_FETCH_ALLOW_PRIVATE_NETWORKS:-false}
       CELERY_DIAGNOSTIC_BEAT_ENABLED: ${CELERY_DIAGNOSTIC_BEAT_ENABLED:-false}
+      # News ingestion schedules (issue #19), independent of the diagnostic
+      # flag above. Beat itself stays profile-gated and off by default.
+      NEWS_INGESTION_ENABLED: ${NEWS_INGESTION_ENABLED:-true}
+      NEWS_POLL_DISPATCH_INTERVAL_SECONDS: ${NEWS_POLL_DISPATCH_INTERVAL_SECONDS:-300}
     volumes:
       - ./backend:/app
     depends_on:

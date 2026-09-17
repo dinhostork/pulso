@@ -119,6 +119,147 @@ Each pending row is then normalized and deduplicated in place. This application
 service does not schedule work or execute retries; the worker orchestration
 issue owns those steps.
 
+## News ingestion orchestration
+
+Ingestion runs through the existing Celery worker and the optional Beat
+scheduler (ADR-0001, ADR-0005). `news/tasks.py` holds only orchestration: each
+task resolves identifiers, calls one application function and translates the
+operational metadata it returns. No normalization, canonicalization, identity
+or deduplication rule lives in the task layer.
+
+| Task | Responsibility | Options |
+| --- | --- | --- |
+| `news.tasks.ingest_endpoint(endpoint_id, trigger="SCHEDULE")` | Fetch one endpoint, store raw revisions, process them | `bind=True`, `max_retries=3`, `soft_time_limit=150`, `time_limit=180` |
+| `news.tasks.process_raw_article(raw_id)` | Process one stored revision | `bind=True`, `max_retries=3` |
+| `news.tasks.poll_due_endpoints()` | Dispatch ingestion for every due, active endpoint | no retry |
+| `news.tasks.reconcile_pending_raw_articles()` | Re-dispatch processing for rows left `PENDING` | no retry |
+
+The global 30 s soft / 60 s hard task limits stay as they are for every other
+task; a fetch plus one batch of processing needs more, so `ingest_endpoint`
+raises its own limits to 150 s / 180 s.
+
+### Retry policy
+
+The task never inspects HTTP status codes or transport exceptions. The fetcher
+decides whether a failure is retryable and parses `Retry-After`; the
+application records the run and returns `will_retry`; the task decides when an
+allowed retry is scheduled:
+
+| Failure | Behavior |
+| --- | --- |
+| `TIMEOUT`, `NETWORK`, 5xx, 408 | Up to 3 retries, countdown `30 · 2^n` seconds plus up to 10% jitter, capped at 600 s |
+| `RATE_LIMITED` with `Retry-After` | One retry per attempt using the server's delay (the fetcher already bounds it to 900 s, so a rate-limit delay may legitimately exceed the 600 s cap that applies to our own backoff) |
+| `HTTP_STATUS` 404, `BLOCKED_TARGET`, `MALFORMED`, … | No retry; one `FAILED` run |
+
+Four executions are therefore possible at most. `attempt` 0 records the
+original `trigger` (`SCHEDULE` or `MANUAL`); every later attempt records
+`RETRY`. `IngestionRun.will_retry` is only true when a retry will actually
+happen, so the last attempt of an exhausted budget is stored as `false`: the
+task passes its remaining budget to the application as `retry_allowed`, and
+`RunSummary.retry_after` carries the rate-limit delay transiently, without a
+database column. Each scheduled retry logs one WARNING with `endpoint_id`,
+`task_id`, `attempt`, `countdown`, `error_kind` and `run_id` — identifiers
+only, never payloads, headers or content.
+
+### Scheduling
+
+| Setting | Default | Behavior |
+| --- | --- | --- |
+| `NEWS_INGESTION_ENABLED` | `true` | Gates both News Beat entries. Independent of `CELERY_DIAGNOSTIC_BEAT_ENABLED`; neither flag affects the other's entries. |
+| `NEWS_POLL_DISPATCH_INTERVAL_SECONDS` | `300` | How often Beat runs `poll_due_endpoints`. Must be a positive integer; `0`, negatives and non-integers are rejected with `ImproperlyConfigured`. |
+
+With the defaults, `CELERY_BEAT_SCHEDULE` contains `news-poll-due-endpoints`
+(every `NEWS_POLL_DISPATCH_INTERVAL_SECONDS`) and `news-reconcile-pending`
+(every 3600 s). `config/settings_test.py` fixes both flags off and keeps
+`CELERY_BEAT_SCHEDULE = {}`, so no test run can schedule recurring work
+regardless of the developer's environment.
+
+`poll_due_endpoints` dispatches an endpoint when it is active, its Source is
+active, and either it has never run or its latest run started at least
+`fetch_interval_seconds` ago. It skips an endpoint whose latest run is
+`RUNNING` and younger than 180 s; an older `RUNNING` row does not block the
+endpoint once its interval has elapsed. One annotated query reads the latest
+run per endpoint, and dispatch happens in `transaction.on_commit`, never
+inside the selecting transaction. Each poll logs
+`dispatched`, `skipped_not_due`, `skipped_running` and `skipped_inactive`;
+`skipped_inactive` counts endpoints that are themselves inactive **or** whose
+Source is inactive.
+
+`reconcile_pending_raw_articles` dispatches `process_raw_article` for `PENDING`
+rows older than 10 minutes, at most 1000 per run, oldest receipt first
+(`created_at`, then `pk`). It never touches a row's payload, hash, endpoint,
+run or timestamps: only processing is retried, through the same application
+function the ingestion loop uses.
+
+Beat's schedule file (`/tmp/celerybeat-schedule` in the container) is
+disposable, and losing it on restart is harmless: `poll_due_endpoints` decides
+what is due from persisted PostgreSQL state, and re-running ingestion for an
+endpoint is idempotent (identical payloads produce no new revision and no new
+Article). Nothing depends on Beat's own bookkeeping surviving.
+
+### Operator commands
+
+The operator surface is `manage.py`; there is no HTTP endpoint for triggering
+ingestion and Django admin is deliberately not enabled.
+
+```bash
+# Sources
+python manage.py news_source add --slug example --name "Example News" \
+    [--homepage-url https://example.com] [--default-language en]
+python manage.py news_source list
+python manage.py news_source enable <slug>
+python manage.py news_source disable <slug>
+
+# Endpoints
+python manage.py news_endpoint add --source example --kind RSS \
+    --url https://example.com/feed.xml [--interval 900] [--adapter-config '{}']
+python manage.py news_endpoint list [--source <slug>]
+python manage.py news_endpoint enable <id|url>
+python manage.py news_endpoint disable <id|url>
+
+# Ingestion
+python manage.py news_ingest --endpoint <id|url>            # runs in this process
+python manage.py news_ingest --endpoint <id|url> --async     # queues the task
+
+# Reprocessing
+python manage.py news_reprocess --raw <id>
+```
+
+`--kind` accepts `RSS` and `JSON_FEED`. `news_endpoint add` goes through the
+model's own `full_clean()`/`save()`, so an endpoint can only be created if it
+passes the same rules the model enforces everywhere: http(s) only, the target
+policy of #13, a JSON-object `adapter_config`, and rejection of secret-like
+configuration keys (`adapter_config` stores the *name* of an environment
+variable, never a secret value). `enable`/`disable` change only `is_active`
+and deliberately do not re-resolve or re-validate the URL.
+
+`--endpoint` takes a numeric id or an exact endpoint URL; a partial URL never
+matches, and an unknown identifier is a `CommandError`. The synchronous path
+prints `run_id`, `status` and every counter and records `trigger=MANUAL`; the
+`--async` path prints the queued task id and its first execution is still
+`MANUAL` (only its retries become `RETRY`).
+
+`news_reprocess` accepts only a `REJECTED` revision. It resets exactly the
+processing result (`status`, `outcome`, `rejection_reason`, `processed_at`,
+`article`) in one committed statement, then calls the ordinary application
+processor; receipt provenance — payload, hash, endpoint, run, external
+identity, `fetched_at`, `supersedes` — is never rewritten.
+
+### Optional demo data (requires external network)
+
+`news/fixtures/demo_sources.json` configures three public, credential-free
+endpoints for manual exploration: BBC News World (RSS), The Django weblog
+(RSS) and Daring Fireball (JSON Feed). It is **optional**, depends on the
+external network, and is never used by the automated tests; those third-party
+endpoints' availability and formats are outside Pulso's control.
+
+```bash
+python manage.py loaddata news/fixtures/demo_sources.json
+python manage.py news_source list
+python manage.py news_endpoint list
+python manage.py news_ingest --endpoint <id>
+```
+
 ## Local Compose stack
 
 Prerequisites: Docker Engine with BuildKit and Docker Compose v2.20 or newer
@@ -387,6 +528,8 @@ harmless diagnostic task; it introduces no product task.
 | --- | --- |
 | `REDIS_HOST`, `REDIS_PORT` | Required, same pattern as the `POSTGRES_*` settings |
 | `CELERY_DIAGNOSTIC_BEAT_ENABLED` | Optional, defaults to `false`; only toggle enabling `diagnostics.tasks.diagnostic_ping` on a 30s Beat schedule |
+| `NEWS_INGESTION_ENABLED` | Optional, defaults to `true`; gates the two News Beat entries (see [News ingestion orchestration](#news-ingestion-orchestration)) |
+| `NEWS_POLL_DISPATCH_INTERVAL_SECONDS` | Optional, defaults to `300`; positive integer interval for `news-poll-due-endpoints` |
 
 `REDIS_PORT` defaults to **6399** on the host to avoid colliding with a
 locally installed Redis on 6379; Compose always uses `redis:6379` between
@@ -464,25 +607,48 @@ not specific to the worker.
 ### Automated real-broker smoke check
 
 Ordinary `pytest` runs are independent of a running worker: `tests/test_diagnostics.py`
-calls the application function directly and calls the task with `.apply()`
-(synchronous, in-process, no broker). The real-broker check lives in
-`tests/test_celery_smoke.py`, marked `celery_smoke` and excluded from the
-default run through `pyproject.toml`'s `addopts` — it requires a separately
-running worker consuming the same Redis instance used by `config.settings_test`
-(logical DB 1, isolated from development DB 0):
+and `tests/news/test_tasks.py` call the task adapters with `.apply()`
+(synchronous, in-process, no broker). The real-broker checks live in
+`tests/test_celery_smoke.py` (diagnostic ping) and
+`tests/news/test_news_celery_smoke.py` (News ingestion), both marked
+`celery_smoke` and excluded from the default run through `pyproject.toml`'s
+`addopts`. They require a separately running worker consuming the same Redis
+instance used by `config.settings_test` (logical DB 1, isolated from
+development DB 0):
 
 ```bash
 docker compose --env-file backend/.env.example --profile test up -d --wait --wait-timeout 90 postgres-test redis
 cd backend
-DJANGO_SETTINGS_MODULE=config.settings_test uv run --locked celery -A config worker --loglevel=INFO --concurrency=2 &
+DJANGO_SETTINGS_MODULE=config.settings_smoke_worker uv run --locked celery -A config worker --loglevel=INFO --concurrency=2 &
 uv run --locked pytest -m celery_smoke
 ```
 
-The check calls `.get(timeout=10)` on the dispatched result: it fails with a
-clear message within that 10s bound if no worker consumes the task, and it
-re-dispatches to assert that repeated delivery still leaves domain state
-(`User` count) unchanged. Stop the background worker afterward; it is not
-part of the normal test suite and does not start automatically.
+`config.settings_smoke_worker` is `config.settings_test` with exactly one
+change: the worker connects to `test_pulso`, the database pytest-django creates
+for the test session, instead of the base `pulso_tests` database. The News
+check asserts rows the worker itself wrote, so the two processes must share one
+database — a worker started with `config.settings_test` reads and writes a
+different database and the check fails immediately rather than passing by
+accident. pytest-django applies the migrations to `test_pulso`, the worker
+connects lazily on its first task, and Celery's Django fixup closes that
+connection after every task, so the test database can still be dropped at the
+end of the session. The News check is `django_db(transaction=True)` so its own
+writes are committed and therefore visible to the worker's connection; its
+rows are removed by the usual post-test flush.
+
+Both checks are bounded: the diagnostic ping uses `.get(timeout=10)` and the
+News check `.get(timeout=30)`, each failing with a clear message if no worker
+consumes the task. The News check serves a repository fixture from a loopback
+HTTP server on an ephemeral 127.0.0.1 port (no internet, no `MockTransport`,
+nothing listening externally) — permitted because `config.settings_test` allows
+private-network targets — then dispatches `news.tasks.ingest_endpoint.delay()`
+twice: the first run is `SUCCEEDED` with Articles created, the second is
+`NO_CHANGE` with no new Article. The fixture server runs in the pytest process
+and the worker is a host process in the same CI job, so `127.0.0.1` resolves to
+the same loopback for both; a containerized worker would not reach it, so this
+command assumes the host worker used by CI. Stop the background worker
+afterward; it is not part of the normal test suite and does not start
+automatically.
 
 ### Verifying the optional Beat schedule
 

@@ -3,7 +3,7 @@
 from django.core.exceptions import ImproperlyConfigured
 
 from .common import *  # noqa: F403
-from .environment import boolean, port, required
+from .environment import boolean, port, positive_int, required
 
 SECRET_KEY = required("SECRET_KEY")
 DEBUG = boolean("DEBUG")
@@ -41,17 +41,30 @@ REDIS_PORT = port("REDIS_PORT")
 CELERY_BROKER_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
 CELERY_RESULT_BACKEND = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
 
-# Disabled by default: normal startup must schedule no product jobs. Enabling
-# this verifies Celery Beat locally with the harmless diagnostic task; see
-# the worker infrastructure section of README.md.
+# Disabled by default: the diagnostic schedule is an infrastructure probe, not
+# a product job. Enabling it verifies Celery Beat locally with the harmless
+# diagnostic task; see the worker infrastructure section of README.md.
 CELERY_DIAGNOSTIC_BEAT_ENABLED = boolean("CELERY_DIAGNOSTIC_BEAT_ENABLED")
-CELERY_BEAT_SCHEDULE = (
-    {
-        "diagnostic-ping": {
-            "task": "diagnostics.tasks.diagnostic_ping",
-            "schedule": 30.0,
-        }
-    }
-    if CELERY_DIAGNOSTIC_BEAT_ENABLED
-    else {}
+# News ingestion schedules (issue #19). Enabled by default: a deployment that
+# runs Beat is expected to poll its configured endpoints. The two flags are
+# independent; neither one enables or disables the other's entries.
+NEWS_INGESTION_ENABLED = boolean("NEWS_INGESTION_ENABLED", default=True)
+NEWS_POLL_DISPATCH_INTERVAL_SECONDS = positive_int(
+    "NEWS_POLL_DISPATCH_INTERVAL_SECONDS", default=300
 )
+
+CELERY_BEAT_SCHEDULE = {}
+if CELERY_DIAGNOSTIC_BEAT_ENABLED:
+    CELERY_BEAT_SCHEDULE["diagnostic-ping"] = {
+        "task": "diagnostics.tasks.diagnostic_ping",
+        "schedule": 30.0,
+    }
+if NEWS_INGESTION_ENABLED:
+    CELERY_BEAT_SCHEDULE["news-poll-due-endpoints"] = {
+        "task": "news.tasks.poll_due_endpoints",
+        "schedule": float(NEWS_POLL_DISPATCH_INTERVAL_SECONDS),
+    }
+    CELERY_BEAT_SCHEDULE["news-reconcile-pending"] = {
+        "task": "news.tasks.reconcile_pending_raw_articles",
+        "schedule": 3600.0,
+    }

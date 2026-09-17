@@ -24,6 +24,14 @@ LOGGER = logging.getLogger("pulso.news.ingest")
 
 @dataclass(frozen=True)
 class RunSummary:
+    """Operational result of one run, including transient retry metadata.
+
+    `will_retry` states whether a retry is both warranted and permitted, so a
+    caller can translate it directly into scheduling. `retry_after` carries a
+    server-provided delay (seconds) for the current failure and is deliberately
+    not persisted: it describes this attempt's scheduling, not run history.
+    """
+
     run_id: int
     status: str
     will_retry: bool
@@ -39,6 +47,7 @@ class RunSummary:
     content_duplicates: int
     raw_rejected: int
     source_identity_conflicts: int
+    retry_after: int | None = None
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -97,7 +106,7 @@ def _stored_payload(item: FetchedItem) -> tuple[dict, bool]:
     return payload, True
 
 
-def _summary(run: IngestionRun) -> RunSummary:
+def _summary(run: IngestionRun, *, retry_after: int | None = None) -> RunSummary:
     return RunSummary(
         run_id=run.pk,
         status=run.status,
@@ -114,6 +123,7 @@ def _summary(run: IngestionRun) -> RunSummary:
         content_duplicates=run.content_duplicates,
         raw_rejected=run.raw_rejected,
         source_identity_conflicts=run.source_identity_conflicts,
+        retry_after=retry_after,
     )
 
 
@@ -137,6 +147,7 @@ def _finalize(
     *,
     etag: str | None = None,
     last_modified: str | None = None,
+    retry_after: int | None = None,
 ) -> RunSummary:
     run.status = status
     run.finished_at = timezone.now()
@@ -189,7 +200,7 @@ def _finalize(
             "duration_ms": run.duration_ms,
         },
     )
-    return _summary(run)
+    return _summary(run, retry_after=retry_after)
 
 
 def _persist_item(
@@ -256,9 +267,20 @@ def _count_processing(run: IngestionRun, outcome: ProcessOutcome) -> None:
 
 
 def ingest_endpoint(
-    endpoint_id: int, *, trigger: str, attempt: int = 0, task_id: str = ""
+    endpoint_id: int,
+    *,
+    trigger: str,
+    attempt: int = 0,
+    task_id: str = "",
+    retry_allowed: bool = True,
 ) -> RunSummary:
-    """Fetch one endpoint, persist raw revisions, and invoke the processing stub."""
+    """Fetch one endpoint, persist raw revisions, and process each pending row.
+
+    `retry_allowed` lets a caller that owns the retry budget (the Celery task
+    adapter, #19) say that no further attempt will happen, so the persisted run
+    records the actual orchestration intent instead of a retry that is never
+    scheduled. It never changes fetching, intake or processing behavior.
+    """
 
     endpoint = SourceEndpoint.objects.select_related("source").get(pk=endpoint_id)
     started = time.monotonic()
@@ -285,8 +307,14 @@ def ingest_endpoint(
         run.http_status = error.http_status
         run.error_kind = error.kind.value
         run.error_message = error.message[:512]
-        run.will_retry = error.retryable
-        return _finalize(run, endpoint, started, IngestionRun.Status.FAILED)
+        run.will_retry = error.retryable and retry_allowed
+        return _finalize(
+            run,
+            endpoint,
+            started,
+            IngestionRun.Status.FAILED,
+            retry_after=error.retry_after,
+        )
 
     if result.not_modified:
         return _finalize(

@@ -55,4 +55,9 @@ CELERY_RESULT_BACKEND = f"redis://{TEST_REDIS_HOST}:{TEST_REDIS_PORT}/1"
 # Normal test runs never schedule anything; the Beat diagnostic is a manual
 # local verification step, not part of the automated test suite.
 CELERY_DIAGNOSTIC_BEAT_ENABLED = False
+# News schedules are a deployment concern. These are fixed here rather than
+# read from the environment so that NEWS_INGESTION_ENABLED in a developer's
+# shell can never make a test run schedule recurring ingestion.
+NEWS_INGESTION_ENABLED = False
+NEWS_POLL_DISPATCH_INTERVAL_SECONDS = 300
 CELERY_BEAT_SCHEDULE = {}

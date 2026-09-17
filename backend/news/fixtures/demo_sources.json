@@ -1,0 +1,89 @@
+[
+  {
+    "model": "news.source",
+    "pk": 9001,
+    "fields": {
+      "slug": "demo-bbc-world",
+      "name": "BBC News — World (demo)",
+      "homepage_url": "https://www.bbc.com/news/world",
+      "default_language": "en",
+      "is_active": true,
+      "created_at": "2026-09-17T00:00:00Z",
+      "updated_at": "2026-09-17T00:00:00Z"
+    }
+  },
+  {
+    "model": "news.source",
+    "pk": 9002,
+    "fields": {
+      "slug": "demo-django-weblog",
+      "name": "The Django weblog (demo)",
+      "homepage_url": "https://www.djangoproject.com/weblog/",
+      "default_language": "en",
+      "is_active": true,
+      "created_at": "2026-09-17T00:00:00Z",
+      "updated_at": "2026-09-17T00:00:00Z"
+    }
+  },
+  {
+    "model": "news.source",
+    "pk": 9003,
+    "fields": {
+      "slug": "demo-daring-fireball",
+      "name": "Daring Fireball (demo)",
+      "homepage_url": "https://daringfireball.net/",
+      "default_language": "en",
+      "is_active": true,
+      "created_at": "2026-09-17T00:00:00Z",
+      "updated_at": "2026-09-17T00:00:00Z"
+    }
+  },
+  {
+    "model": "news.sourceendpoint",
+    "pk": 9001,
+    "fields": {
+      "source": 9001,
+      "kind": "RSS",
+      "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
+      "is_active": true,
+      "fetch_interval_seconds": 900,
+      "adapter_config": {},
+      "etag": "",
+      "last_modified": "",
+      "created_at": "2026-09-17T00:00:00Z",
+      "updated_at": "2026-09-17T00:00:00Z"
+    }
+  },
+  {
+    "model": "news.sourceendpoint",
+    "pk": 9002,
+    "fields": {
+      "source": 9002,
+      "kind": "RSS",
+      "url": "https://www.djangoproject.com/rss/weblog/",
+      "is_active": true,
+      "fetch_interval_seconds": 3600,
+      "adapter_config": {},
+      "etag": "",
+      "last_modified": "",
+      "created_at": "2026-09-17T00:00:00Z",
+      "updated_at": "2026-09-17T00:00:00Z"
+    }
+  },
+  {
+    "model": "news.sourceendpoint",
+    "pk": 9003,
+    "fields": {
+      "source": 9003,
+      "kind": "JSON_FEED",
+      "url": "https://daringfireball.net/feeds/json",
+      "is_active": true,
+      "fetch_interval_seconds": 3600,
+      "adapter_config": {},
+      "etag": "",
+      "last_modified": "",
+      "created_at": "2026-09-17T00:00:00Z",
+      "updated_at": "2026-09-17T00:00:00Z"
+    }
+  }
+]
