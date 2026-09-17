@@ -10,6 +10,7 @@ from news.application.ports import (
     FetchedItem,
     FetchError,
     FetchErrorKind,
+    FetchResponse,
     FetchResult,
     RejectedItem,
 )
@@ -183,6 +184,56 @@ def fixture_run(endpoint, monkeypatch, name):
         "news.application.ingest.adapter_for", lambda _: FixtureAdapter(fixture(name))
     )
     return ingest_endpoint(endpoint.pk, trigger="MANUAL")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("kind", "fixture_name", "content_type"),
+    (
+        ("RSS", "rss_valid.xml", "application/rss+xml"),
+        ("JSON_FEED", "jsonfeed_valid.json", "application/feed+json"),
+    ),
+)
+def test_intake_boundary_is_independent_of_adapter_fields(
+    endpoint, monkeypatch, kind, fixture_name, content_type
+):
+    body = fixture(fixture_name)
+
+    class AdapterFixtureFetcher:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def get(self, *_args, **_kwargs):
+            return FetchResponse(body=body, content_type=content_type)
+
+    endpoint.kind = kind
+    endpoint.save(update_fields=["kind"])
+    monkeypatch.setattr("news.application.ingest.Fetcher", AdapterFixtureFetcher)
+
+    summary = ingest_endpoint(endpoint.pk, trigger="MANUAL")
+
+    assert summary.raw_created > 0
+    assert summary.raw_created + summary.raw_unchanged + summary.raw_changed > 0
+    assert all(
+        set(raw.payload)
+        <= {
+            "external_id",
+            "url",
+            "title",
+            "summary_html",
+            "content_html",
+            "published_at",
+            "updated_at",
+            "authors",
+            "language",
+            "raw",
+            "truncated",
+        }
+        for raw in RawArticle.objects.all()
+    )
 
 
 @pytest.mark.django_db
