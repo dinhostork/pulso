@@ -14,6 +14,7 @@ services:
       POSTGRES_PORT: "5432"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      NEWS_FETCH_ALLOW_PRIVATE_NETWORKS: ${NEWS_FETCH_ALLOW_PRIVATE_NETWORKS:-false}
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
     volumes:
@@ -53,6 +54,7 @@ services:
       POSTGRES_PORT: "5432"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      NEWS_FETCH_ALLOW_PRIVATE_NETWORKS: ${NEWS_FETCH_ALLOW_PRIVATE_NETWORKS:-false}
     volumes:
       - ./backend:/app
     depends_on:
@@ -86,6 +88,7 @@ services:
       POSTGRES_PORT: "5432"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      NEWS_FETCH_ALLOW_PRIVATE_NETWORKS: ${NEWS_FETCH_ALLOW_PRIVATE_NETWORKS:-false}
       CELERY_DIAGNOSTIC_BEAT_ENABLED: ${CELERY_DIAGNOSTIC_BEAT_ENABLED:-false}
     volumes:
       - ./backend:/app

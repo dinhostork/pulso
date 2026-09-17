@@ -53,6 +53,31 @@ and CSRF cookies require HTTPS. Generate a secret key before any deployment;
 the example values are not deployment credentials. These settings are a
 bootstrap, not a complete production deployment configuration.
 
+## News ingestion settings
+
+News source endpoints are validated against all resolved IP addresses when
+saved, and the shared HTTP fetcher checks each request and redirect again.
+Only HTTP(S) targets and RSS/XML/JSON/text feed media types are accepted;
+`text/html` is refused. RSS and JSON Feed parsers arrive in later issues.
+
+| Setting | Default | Behavior |
+| --- | --- | --- |
+| `NEWS_FETCH_ALLOW_PRIVATE_NETWORKS` | `false` | Only environment override. `true` permits private/loopback targets for controlled local tests; normal development and deployment should keep it `false`. |
+| `NEWS_FETCH_MAX_RESPONSE_BYTES` | 5 MiB | Rejects oversized `Content-Length` before reading; decoded gzip/deflate output is bounded during decompression. Unknown-length or compressed streams are refused when decoded content reaches the cap. |
+| `NEWS_FETCH_MAX_REDIRECTS` | 5 | Each hop is checked; HTTPS-to-HTTP downgrade is refused. |
+| `NEWS_FETCH_CONNECT_TIMEOUT_SECONDS` | 5 | Connection timeout. |
+| `NEWS_FETCH_READ_TIMEOUT_SECONDS` | 15 | Per-read timeout. |
+| `NEWS_FETCH_WRITE_TIMEOUT_SECONDS` | 5 | Write timeout. |
+| `NEWS_FETCH_POOL_TIMEOUT_SECONDS` | 5 | Connection-pool timeout. |
+
+The last six settings are fixed application constants, not environment knobs.
+`config.settings_test` enables the private-network exception for the future
+loopback fixture server (#21); policy tests explicitly exercise both flag
+values with fake DNS. The override does not disable scheme, redirect, size,
+media-type or timeout checks. DNS answers are checked before connecting, but
+the HTTP client resolves again at connection time. DNS rebinding in that gap
+remains a known risk; no IP pinning is implemented here.
+
 ## Local Compose stack
 
 Prerequisites: Docker Engine with BuildKit and Docker Compose v2.20 or newer

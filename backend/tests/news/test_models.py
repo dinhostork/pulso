@@ -4,9 +4,17 @@ import pytest
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connection, transaction
 from django.db.models.deletion import ProtectedError
+from django.test import override_settings
 from django.utils import timezone
 
 from news.models import Article, RawArticle, Source, SourceEndpoint
+
+
+@pytest.fixture(autouse=True)
+def offline_endpoint_dns(monkeypatch):
+    """Model validation resolves names, so existing persistence tests use fake DNS."""
+
+    monkeypatch.setattr("news.adapters.targets._resolve", lambda _host, _port: ("8.8.8.8",))
 
 
 @pytest.fixture
@@ -164,6 +172,36 @@ def test_endpoint_validation_rejects_secret_keys_without_values(source, key):
         endpoint.save()
     assert key in str(error.value)
     assert sentinel not in str(error.value)
+
+
+@pytest.mark.django_db
+def test_endpoint_target_validation_rejects_private_dns(source, monkeypatch):
+    monkeypatch.setattr("news.adapters.targets._resolve", lambda _host, _port: ("10.0.0.5",))
+    endpoint = SourceEndpoint(
+        source=source, kind=SourceEndpoint.Kind.RSS, url="https://feed.example/rss"
+    )
+    with override_settings(NEWS_FETCH_ALLOW_PRIVATE_NETWORKS=False):
+        with pytest.raises(ValidationError, match="BLOCKED_TARGET"):
+            endpoint.save()
+
+
+@pytest.mark.django_db
+def test_endpoint_target_validation_allows_public_dns(source):
+    with override_settings(NEWS_FETCH_ALLOW_PRIVATE_NETWORKS=False):
+        endpoint = SourceEndpoint.objects.create(
+            source=source, kind=SourceEndpoint.Kind.RSS, url="https://feed.example/rss"
+        )
+    assert endpoint.pk is not None
+
+
+@pytest.mark.django_db
+def test_endpoint_target_validation_allows_controlled_private_dns(source, monkeypatch):
+    monkeypatch.setattr("news.adapters.targets._resolve", lambda _host, _port: ("127.0.0.1",))
+    with override_settings(NEWS_FETCH_ALLOW_PRIVATE_NETWORKS=True):
+        endpoint = SourceEndpoint.objects.create(
+            source=source, kind=SourceEndpoint.Kind.RSS, url="https://fixture.example/rss"
+        )
+    assert endpoint.pk is not None
 
 
 @pytest.mark.django_db

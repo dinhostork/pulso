@@ -1,1 +1,1 @@
-"""Future external source integrations for News use cases."""
+"""News transport adapters and outbound target policy."""

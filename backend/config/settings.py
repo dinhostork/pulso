@@ -7,6 +7,7 @@ from .environment import boolean, port, required
 
 SECRET_KEY = required("SECRET_KEY")
 DEBUG = boolean("DEBUG")
+NEWS_FETCH_ALLOW_PRIVATE_NETWORKS = boolean("NEWS_FETCH_ALLOW_PRIVATE_NETWORKS")
 ALLOWED_HOSTS = [host.strip() for host in required("ALLOWED_HOSTS").split(",")]
 if any(not host for host in ALLOWED_HOSTS) or "*" in ALLOWED_HOSTS:
     raise ImproperlyConfigured("ALLOWED_HOSTS must list explicit nonempty hosts")

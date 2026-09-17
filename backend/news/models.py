@@ -2,10 +2,14 @@
 
 import re
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator
 from django.db import models
 from django.db.models import F, Q
+
+from news.adapters.targets import assert_allowed_target
+from news.application.ports import FetchError
 
 
 class Source(models.Model):
@@ -71,6 +75,13 @@ class SourceEndpoint(models.Model):
             _HTTP_URL(self.url)
         except ValidationError:
             errors["url"] = "Endpoint URL must use http or https."
+        else:
+            try:
+                assert_allowed_target(
+                    self.url, allow_private=settings.NEWS_FETCH_ALLOW_PRIVATE_NETWORKS
+                )
+            except FetchError as error:
+                errors["url"] = f"Endpoint target rejected: {error.kind.value}."
         if not isinstance(self.adapter_config, dict):
             errors["adapter_config"] = "Adapter configuration must be an object."
         else:

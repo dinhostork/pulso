@@ -84,3 +84,13 @@ CELERY_TASK_REJECT_ON_WORKER_LOST = True
 # Bounded timeout for /health/ready's dependency probes (issue #5): a slow or
 # unreachable PostgreSQL/Redis must fail fast, not hang the request.
 HEALTH_CHECK_TIMEOUT_SECONDS = 2
+
+# News outbound transport policy. Only the private-network switch is an
+# environment option; the other limits are fixed for predictable behavior.
+NEWS_FETCH_ALLOW_PRIVATE_NETWORKS = False
+NEWS_FETCH_MAX_RESPONSE_BYTES = 5 * 1024 * 1024
+NEWS_FETCH_MAX_REDIRECTS = 5
+NEWS_FETCH_CONNECT_TIMEOUT_SECONDS = 5
+NEWS_FETCH_READ_TIMEOUT_SECONDS = 15
+NEWS_FETCH_WRITE_TIMEOUT_SECONDS = 5
+NEWS_FETCH_POOL_TIMEOUT_SECONDS = 5

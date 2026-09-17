@@ -8,6 +8,9 @@ from .common import *  # noqa: F403
 
 SECRET_KEY = "test-only-key-not-for-deployment-0123456789-abcdefghijklmnopqrstuvwxyz"
 DEBUG = False
+# Later local fixture-server integration (#21) uses loopback. Target-policy
+# unit tests explicitly exercise both flag values with an injected resolver.
+NEWS_FETCH_ALLOW_PRIVATE_NETWORKS = True
 ALLOWED_HOSTS = ["testserver", "localhost", "127.0.0.1"]
 
 TEST_HOST = os.environ.get("TEST_POSTGRES_HOST", "127.0.0.1")

@@ -1,1 +1,1 @@
-"""Future News use cases coordinate persistence and domain rules."""
+"""News use-case contracts; orchestration is added with ingestion."""
