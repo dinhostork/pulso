@@ -192,7 +192,15 @@ class RssAdapter:
                 not_modified=True, etag=response.etag, last_modified=response.last_modified
             )
 
-        parsed = feedparser.parse(response.body, response_headers=response.response_headers)
+        # Preserve suppressed-element boundaries for the deterministic domain
+        # HTML parser. feedparser's sanitizer removes iframe tags but retains
+        # fallback text, making that text indistinguishable from publication
+        # content before normalization.
+        parsed = feedparser.parse(
+            response.body,
+            response_headers=response.response_headers,
+            sanitize_html=False,
+        )
         entries = parsed.entries
         if parsed.get("bozo") and not entries:
             raise FetchError(FetchErrorKind.MALFORMED, "Syndication document is malformed")

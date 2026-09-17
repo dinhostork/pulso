@@ -15,7 +15,7 @@ from news.application.ports import (
     RejectedItem,
 )
 from news.domain.fingerprints import payload_hash
-from news.models import IngestionRun, RawArticle, Source, SourceEndpoint
+from news.models import Article, IngestionRun, RawArticle, Source, SourceEndpoint
 
 
 class FakeFetcher:
@@ -186,6 +186,11 @@ def fixture_run(endpoint, monkeypatch, name):
     return ingest_endpoint(endpoint.pk, trigger="MANUAL")
 
 
+def clear_processed_publications():
+    Article.objects.all().delete()
+    RawArticle.objects.all().delete()
+
+
 @pytest.mark.django_db
 @pytest.mark.parametrize(
     ("kind", "fixture_name", "content_type"),
@@ -242,14 +247,14 @@ def test_rss_fixture_idempotency_duplicate_and_malformed(endpoint, monkeypatch, 
     second = fixture_run(endpoint, monkeypatch, "rss_valid.xml")
     assert first.raw_created == 10 and first.status == "SUCCEEDED"
     assert second.raw_unchanged == 10 and second.status == "NO_CHANGE"
-    RawArticle.objects.all().delete()
+    clear_processed_publications()
     duplicate = fixture_run(endpoint, monkeypatch, "rss_duplicate_entry.xml")
     assert (
         duplicate.raw_created == 1
         and duplicate.raw_unchanged == 1
         and RawArticle.objects.count() == 1
     )
-    RawArticle.objects.all().delete()
+    clear_processed_publications()
     malformed = fixture_run(endpoint, monkeypatch, "rss_malformed_item.xml")
     assert (
         malformed.status == "PARTIAL"
@@ -265,7 +270,7 @@ def test_rss_id_only_fixture_and_changed_revision(endpoint, monkeypatch):
     assert summary.status == "PARTIAL" and summary.items_rejected == 1
     raw = RawArticle.objects.get()
     assert raw.external_key == "guid-only-1" and raw.url == ""
-    RawArticle.objects.all().delete()
+    clear_processed_publications()
     one = item("revision", title="v1")
     run(endpoint, monkeypatch, FetchResult(items=(one,)))
     original = RawArticle.objects.get()

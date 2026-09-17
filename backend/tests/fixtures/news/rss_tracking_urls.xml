@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Tracking URLs</title>
+    <link>https://news.example/</link>
+    <description>Canonical identity fixture</description>
+    <language>en-US</language>
+    <item>
+      <guid isPermaLink="false">tracking-a</guid>
+      <link>https://news.example/item?utm_source=one&amp;b=2&amp;a=1#top</link>
+      <title>Canonical item</title>
+      <content:encoded><![CDATA[<p>Same publication body.</p>]]></content:encoded>
+    </item>
+    <item>
+      <guid isPermaLink="false">tracking-b</guid>
+      <link>https://news.example/item?a=1&amp;utm_medium=two&amp;b=2#other</link>
+      <title>Canonical item</title>
+      <content:encoded><![CDATA[<p>Same publication body.</p>]]></content:encoded>
+    </item>
+  </channel>
+</rss>

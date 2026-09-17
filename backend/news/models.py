@@ -237,7 +237,7 @@ class Article(models.Model):
     title = models.TextField()
     description = models.TextField(blank=True)
     body_text = models.TextField(blank=True)
-    byline = models.CharField(max_length=255, blank=True)
+    byline = models.CharField(max_length=512, blank=True)
     published_at = models.DateTimeField(null=True, blank=True)
     language = models.CharField(max_length=35)
     content_fingerprint = models.CharField(max_length=64, db_index=True)

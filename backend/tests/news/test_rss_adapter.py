@@ -186,12 +186,11 @@ def test_iso_8859_1_bytes_decode_using_response_charset():
     assert result.items[0].title == "Café e açúcar"
 
 
-def test_html_content_keeps_markup_but_feedparser_sanitizes_active_elements():
+def test_html_content_preserves_suppressed_element_boundaries_for_normalization():
     result, _ = parsed_fixture("rss_html_content.xml")
     html = result.items[0].content_html
     assert "<p>" in html and "<strong>" in html
-    assert "<script" not in html and "<iframe" not in html
-    assert "alert(" not in html
+    assert "<script" in html and "<style" in html and "<iframe" in html
 
 
 def test_wrong_media_type_fails_in_fetcher_without_parsing(monkeypatch):
