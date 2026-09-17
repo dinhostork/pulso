@@ -612,6 +612,16 @@ without loading development environment variables or credentials. pytest creates
 drops that database after the session. The service's maintenance database is
 `pulso_tests`. No manual SQL or pre-created test schema is required.
 
+The ordinary backend suite includes `tests/news/test_news_core_end_to_end.py`:
+it exercises RSS and JSON Feed through a real loopback fixture HTTP server,
+RawArticle intake, normalization and Article deduplication. The reusable
+fixture corpus is catalogued in `tests/fixtures/news/README.md`; the server
+implementation lives in `tests/news/fixture_server.py`. A session DNS guard
+blocks public hostname resolution, so tests cannot silently depend on live
+sites. `config.settings_test` permits private targets only to reach the local
+fixture server; development settings still default to denying them. The
+separate real-worker News smoke remains opt-in with `pytest -m celery_smoke`.
+
 The root backend `conftest.py` rejects alternate settings, development database
 names/credentials, mirrors and `--no-migrations` before test database setup.
 Use the standard commands above; the guard protects against configuration

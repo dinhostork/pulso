@@ -371,6 +371,7 @@ def ingest_endpoint(
         .order_by("created_at", "pk")
         .values_list("pk", flat=True)
     )
+    processed_pending = False
     for raw_id in pending_ids:
         try:
             # The current run's context, not the row's receipt provenance: a
@@ -390,10 +391,12 @@ def ingest_endpoint(
             continue
         run.items_processed += 1
         _count_processing(run, outcome)
+        if outcome.state is ProcessState.PROCESSED:
+            processed_pending = True
 
     if run.items_rejected or run.items_failed or run.raw_rejected:
         status = IngestionRun.Status.PARTIAL
-    elif run.raw_created or run.raw_changed:
+    elif run.raw_created or run.raw_changed or processed_pending:
         status = IngestionRun.Status.SUCCEEDED
     else:
         status = IngestionRun.Status.NO_CHANGE
