@@ -1,5 +1,9 @@
 # Backend bootstrap
 
+> Setting up the whole project (backend + mobile) for the first time? Start
+> at [`docs/development.md`](../docs/development.md) instead; come back here
+> for backend-specific depth.
+
 ## Runtime and dependencies
 
 Use Python **3.14.4** (`.python-version`) and **uv 0.12.13**. The supported Python

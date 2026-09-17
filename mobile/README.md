@@ -1,5 +1,9 @@
 # Mobile bootstrap
 
+> Setting up the whole project (backend + mobile) for the first time? Start
+> at [`docs/development.md`](../docs/development.md) instead; come back here
+> for mobile-specific depth.
+
 An Expo/TypeScript application shell for Pulso's React Native mobile app. This
 is a bootstrap (issue #7): a reproducible shell other mobile issues extend, not
 a product screen. No Story feed, Opinion UI, fake dataset or authentication
@@ -98,17 +102,25 @@ default case) so the shell still renders with no `.env` file at all.
 
 ```text
 src/
-  app/            expo-router file-based routes; only screens/layouts here
-    _layout.tsx   root layout (SafeAreaProvider, status bar, Stack)
-    index.tsx     the landing screen
+  app/                expo-router file-based routes; only screens/layouts here
+    _layout.tsx       root layout (SafeAreaProvider, status bar, Stack)
+    index.tsx         the landing screen
+    __tests__/        tests for files in app/ — see note below
   config/
-    env.ts        public, build-time-inlined configuration (API base URL)
-assets/           app icon and splash images
+    env.ts            public, build-time-inlined configuration (API base URL)
+assets/               app icon and splash images
 ```
 
 `src/app` is intentionally the only place route files live, matching
 `expo-router`'s file-based routing convention: adding a new screen means
 adding a file here, ready for future navigation without restructuring.
+`expo-router` scans every file under `src/app` as a candidate route except
+inside a `__tests__` directory (or files starting with `.`) — a `*.test.tsx`
+placed directly in `src/app` becomes a real, navigable, exported route
+(e.g. `index.test.tsx` shipping as `/index.test`), not just a Jest file.
+Discovered via `npx expo export --platform web` during issue #10's
+fresh-checkout walkthrough; keep any future `src/app/**` test alongside
+its screen but inside a `__tests__` folder, never a bare sibling file.
 
 ## Quality and testing
 
@@ -140,7 +152,7 @@ Jest uses the `jest-expo` preset (jsdom-free, React Native-aware
 transforms) with `@testing-library/react-native` for component rendering.
 Both existing tests run fully offline:
 
-- `src/app/index.test.tsx` renders the landing screen and asserts its
+- `src/app/__tests__/index.test.tsx` renders the landing screen and asserts its
   visible text ("Pulso", "Mobile application shell", the API base URL
   line) — the "component tests render the shell" acceptance criterion.
   `@testing-library/react-native`'s `render` is asynchronous (`await

@@ -485,6 +485,17 @@ a per-job `timeout-minutes` plus each step's own internal bounds (Compose
 
 ---
 
+## Local development
+
+**[`docs/development.md`](docs/development.md)** is the single walkthrough
+for running the whole Foundation locally from a clean checkout — backend,
+PostgreSQL/pgvector, Redis, the Celery worker, optional Beat, the mobile
+shell, quality/test commands, troubleshooting, and the issue → branch →
+PR contribution workflow. `backend/README.md` and `mobile/README.md`
+remain the detailed per-stack references it links out to.
+
+---
+
 ## UX documentation
 
 The current interaction model and low-fidelity wireframes are available in:
