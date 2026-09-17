@@ -84,6 +84,22 @@ media-type or timeout checks. DNS answers are checked before connecting, but
 the HTTP client resolves again at connection time. DNS rebinding in that gap
 remains a known risk; no IP pinning is implemented here.
 
+## News ingestion
+
+Each endpoint fetch creates an `IngestionRun`: `RUNNING` while executing, then
+`SUCCEEDED`, `PARTIAL`, `NO_CHANGE`, or `FAILED`. Its counters distinguish
+received and rejected items, new/changed/unchanged raw revisions, successful
+processing-stub invocations, and isolated processing failures. Expected fetch
+failures record safe error kind, HTTP status, and whether a future caller may
+retry them.
+
+One run accepts at most 500 fetched items. Each stored `RawArticle.payload` is
+valid canonical JSON capped at 256 KiB; oversized content and metadata are
+reduced deterministically before its hash is calculated. Pending rows from an
+earlier interrupted run are replayed without changing their receipt provenance.
+This application service does not schedule work, execute retries, or create
+normalized Articles; later worker and normalization issues own those steps.
+
 ## Local Compose stack
 
 Prerequisites: Docker Engine with BuildKit and Docker Compose v2.20 or newer

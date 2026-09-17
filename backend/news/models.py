@@ -98,6 +98,66 @@ class SourceEndpoint(models.Model):
         return super().save(*args, **kwargs)
 
 
+class IngestionRun(models.Model):
+    """Operational record of one endpoint fetch and raw-material intake."""
+
+    class Status(models.TextChoices):
+        RUNNING = "RUNNING", "Running"
+        SUCCEEDED = "SUCCEEDED", "Succeeded"
+        PARTIAL = "PARTIAL", "Partial"
+        NO_CHANGE = "NO_CHANGE", "No change"
+        FAILED = "FAILED", "Failed"
+
+    endpoint = models.ForeignKey(
+        SourceEndpoint, on_delete=models.PROTECT, related_name="ingestion_runs"
+    )
+    trigger = models.CharField(max_length=32)
+    attempt = models.PositiveIntegerField(default=0)
+    task_id = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.RUNNING)
+    started_at = models.DateTimeField()
+    finished_at = models.DateTimeField(null=True, blank=True)
+    http_status = models.PositiveSmallIntegerField(null=True, blank=True)
+    error_kind = models.CharField(max_length=32, blank=True)
+    error_message = models.CharField(max_length=512, blank=True)
+    will_retry = models.BooleanField(default=False)
+    items_received = models.PositiveIntegerField(default=0)
+    items_rejected = models.PositiveIntegerField(default=0)
+    raw_created = models.PositiveIntegerField(default=0)
+    raw_unchanged = models.PositiveIntegerField(default=0)
+    raw_changed = models.PositiveIntegerField(default=0)
+    items_processed = models.PositiveIntegerField(default=0)
+    items_failed = models.PositiveIntegerField(default=0)
+    duration_ms = models.PositiveBigIntegerField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["endpoint", "-started_at"], name="news_run_endpoint_recent_idx"),
+            models.Index(fields=["status", "started_at"], name="news_run_status_started_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(attempt__gte=0), name="news_run_attempt_nonnegative"
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(items_received__gte=0)
+                    & Q(items_rejected__gte=0)
+                    & Q(raw_created__gte=0)
+                    & Q(raw_unchanged__gte=0)
+                    & Q(raw_changed__gte=0)
+                    & Q(items_processed__gte=0)
+                    & Q(items_failed__gte=0)
+                ),
+                name="news_run_counters_nonnegative",
+            ),
+            models.CheckConstraint(
+                condition=Q(duration_ms__isnull=True) | Q(duration_ms__gte=0),
+                name="news_run_duration_nonnegative",
+            ),
+        ]
+
+
 class RawArticle(models.Model):
     """A received payload revision, distinct from a normalized Article."""
 
@@ -122,7 +182,13 @@ class RawArticle(models.Model):
     endpoint = models.ForeignKey(
         SourceEndpoint, on_delete=models.PROTECT, related_name="raw_articles"
     )
-    # IngestionRun and this row's ingestion_run FK are introduced together in #16.
+    ingestion_run = models.ForeignKey(
+        IngestionRun,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="raw_articles",
+    )
     external_key_kind = models.CharField(max_length=16, choices=ExternalKeyKind.choices)
     external_key = models.TextField()
     external_id = models.TextField(blank=True)
