@@ -68,3 +68,7 @@ if NEWS_INGESTION_ENABLED:
         "task": "news.tasks.reconcile_pending_raw_articles",
         "schedule": 3600.0,
     }
+    CELERY_BEAT_SCHEDULE["news-prune-runs"] = {
+        "task": "news.tasks.prune_ingestion_runs",
+        "schedule": 604800.0,
+    }

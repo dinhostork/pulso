@@ -167,10 +167,12 @@ only, never payloads, headers or content.
 | --- | --- | --- |
 | `NEWS_INGESTION_ENABLED` | `true` | Gates both News Beat entries. Independent of `CELERY_DIAGNOSTIC_BEAT_ENABLED`; neither flag affects the other's entries. |
 | `NEWS_POLL_DISPATCH_INTERVAL_SECONDS` | `300` | How often Beat runs `poll_due_endpoints`. Must be a positive integer; `0`, negatives and non-integers are rejected with `ImproperlyConfigured`. |
+| `LOG_LEVEL` | `INFO` | Level of the `pulso` JSON log tree (see [observability](#news-ingestion-observability-and-retention)); Django and Celery loggers are unaffected. |
 
 With the defaults, `CELERY_BEAT_SCHEDULE` contains `news-poll-due-endpoints`
-(every `NEWS_POLL_DISPATCH_INTERVAL_SECONDS`) and `news-reconcile-pending`
-(every 3600 s). `config/settings_test.py` fixes both flags off and keeps
+(every `NEWS_POLL_DISPATCH_INTERVAL_SECONDS`), `news-reconcile-pending`
+(every 3600 s) and `news-prune-runs` (weekly, see
+[run retention](#run-retention)). `config/settings_test.py` fixes both flags off and keeps
 `CELERY_BEAT_SCHEDULE = {}`, so no test run can schedule recurring work
 regardless of the developer's environment.
 
@@ -259,6 +261,131 @@ python manage.py news_source list
 python manage.py news_endpoint list
 python manage.py news_ingest --endpoint <id>
 ```
+
+## News ingestion observability and retention
+
+Ingestion is diagnosable from two places only: the `IngestionRun`/`RawArticle`
+rows in PostgreSQL and the structured logs. There is no metrics platform in
+this milestone — counters live in the database, and the log format is chosen so
+a future log shipper needs no change.
+
+**Logs are operational metadata, not a copy of article content.**
+
+### JSON-lines format
+
+Every record in the `pulso` logger tree is one JSON object on one line, written
+by `config/logging.py::JsonLinesFormatter` (a stdlib `logging.Formatter`
+subclass; no logging dependency). Base fields on every record:
+
+| Field | Meaning |
+| --- | --- |
+| `timestamp` | UTC ISO-8601, from the record's creation time |
+| `level` | `DEBUG` … `CRITICAL` |
+| `logger` | e.g. `pulso.news.ingest`, `pulso.news.process`, `pulso.news.tasks`, `pulso.diagnostics` |
+| `message` | the human-readable message, with `%`-parameters already applied |
+
+Beyond those, the formatter emits **only** the fields in its `SAFE_FIELDS`
+allowlist: identifiers, statuses, counts and reasons. `record.__dict__` is
+never serialized wholesale, so an accidental
+`extra={"payload": ...}` at some future call site cannot leak publication
+content, HTTP headers, credentials or `adapter_config` into the logs. Values
+are primitives (anything else is reduced to its type name) and bounded to 512
+characters. An exception contributes its class name only — never its arguments
+or traceback, which may carry transport data; Django and Celery keep their own
+loggers, levels and tracebacks untouched.
+
+`LOG_LEVEL` (default `INFO`, one of `DEBUG`, `INFO`, `WARNING`, `ERROR`,
+`CRITICAL`) sets the level of the `pulso` tree; an unrecognized value is an
+`ImproperlyConfigured` error at startup rather than silently dropped records.
+The tree uses `propagate=False`, so structured records are not duplicated as
+plain text through the root logger.
+
+### Stable ingestion context
+
+`news/logging.py::ingestion_logger(**context)` returns a `LoggerAdapter` that
+merges its context into every record it emits, so one ingestion execution can
+be followed without correlating by timestamp. A call site's own fields are kept
+and win on a key collision, so a per-item `position` is never masked by the run
+context. The context is a snapshot of primitives: formatting a record never
+queries the database.
+
+| Field | Source |
+| --- | --- |
+| `source_id`, `source_slug` | the endpoint's Source |
+| `endpoint_id`, `adapter` | the `SourceEndpoint` and its kind |
+| `run_id`, `task_id`, `attempt`, `trigger` | the `IngestionRun` being executed |
+
+Every record of one `ingest_endpoint` execution carries all eight: run start,
+adapter and intake rejections, payload truncation, each per-item processing
+outcome, processing failures and the run summary.
+
+The ingestion loop passes its own logger into `process_raw_article`, so a
+`PENDING` row replayed from an interrupted earlier run is logged against the
+run that is **processing** it now. `RawArticle.ingestion_run` remains untouched
+receipt provenance — the two are deliberately different facts. A task-driven
+`process_raw_article` call (reconciliation) has no current run, so it logs the
+Source/endpoint context without inventing run fields.
+
+Key events: `News ingestion run started`, `News item rejected by adapter`,
+`News item rejected during intake`, `News ingestion item limit applied`,
+`News item payload truncated`, `Raw article processed`,
+`News raw processing failed`, `News ingestion retry scheduled` and
+`News ingestion run finalized`. The summary record mirrors the stored result:
+`status`, `error_kind`, `http_status`, `will_retry`, `duration_ms` and all
+eleven counters.
+
+`Raw article processed` is the uniform per-revision event — `state`
+(`PROCESSED`/`REJECTED`/`LOCKED`/`SKIPPED`), `outcome`, `rejection_reason` and
+`article_id` — emitted for every row whatever the result. A rejection or an
+identity conflict additionally keeps its own WARNING from #16/#17, so an
+operator can alert on those without parsing every per-item event.
+
+### Inspecting runs
+
+```bash
+python manage.py news_runs                      # 20 most recent, newest first
+python manage.py news_runs --last 5
+python manage.py news_runs --endpoint 12
+python manage.py news_runs --endpoint https://example.com/feed.xml
+python manage.py news_runs --stale
+```
+
+Rows are ordered `started_at` descending with `pk` descending as a
+deterministic tie-breaker, and limited in SQL. `--endpoint` takes a numeric id
+or an exact endpoint URL, never a partial match. The table shows status,
+trigger, attempt, every counter, error kind, duration and both timestamps.
+
+A run is **stale** when it is still `RUNNING` and started more than
+`NEWS_STALE_RUNNING_SECONDS` (180 s) ago. That is one fixed operational
+constant shared with the poll dispatcher's in-flight guard, so
+`news_runs --stale` and scheduling can never disagree. Staleness is decided by
+`started_at`, and a finalized run is never stale whatever its age.
+`--stale` exits **1** when it finds any (after printing them) and **0** when it
+finds none, so it can be used directly in a monitoring script.
+
+### Run retention
+
+```bash
+python manage.py news_prune_runs                # 30-day default
+python manage.py news_prune_runs --days 7
+```
+
+Only **finalized** runs are deleted: a run with a real `finished_at` that is
+older than the window. Retention is measured from `finished_at`, never from
+`started_at`, so a long execution is never expired while it is still running,
+and a `RUNNING` run is never deleted whatever its age — those are reported by
+`news_runs --stale` and an operator decides. The command prints the number of
+rows deleted and the window used.
+
+`RawArticle` and `Article` rows are never deleted. `RawArticle.ingestion_run`
+becomes `NULL` through the existing `on_delete=SET_NULL` rule, in one bulk
+`UPDATE`: the link to discarded operational history goes away, receipt
+provenance and publications stay.
+
+The rule lives in `news/application/operations.py::prune_ingestion_runs`, so
+the command and the optional weekly schedule apply exactly the same logic. When
+`NEWS_INGESTION_ENABLED` is true, Beat also runs `news-prune-runs` every
+604800 s (weekly) with the same 30-day default.
 
 ## Local Compose stack
 

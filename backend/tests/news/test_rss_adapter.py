@@ -230,7 +230,7 @@ def test_304_skips_parser_and_preserves_validators(monkeypatch):
     assert (result.etag, result.last_modified) == ("v2", "today")
 
 
-def test_bozo_with_entries_warns_without_exposing_payload(caplog):
+def test_bozo_with_entries_warns_without_exposing_payload(pulso_caplog):
     body = fixture("rss_valid.xml").replace(b"</channel></rss>", b"</channel>")
 
     class FakeFetcher:
@@ -239,8 +239,8 @@ def test_bozo_with_entries_warns_without_exposing_payload(caplog):
 
     result = RssAdapter().fetch(EndpointFetchRequest(url=URL), FakeFetcher())
     assert len(result.items) == 10
-    assert "adapter=RSS entries=10" in caplog.text
-    assert "Body 1" not in caplog.text
+    assert "adapter=RSS entries=10" in pulso_caplog.text
+    assert "Body 1" not in pulso_caplog.text
 
 
 def test_raw_is_json_safe_and_bounded_for_all_fixtures():

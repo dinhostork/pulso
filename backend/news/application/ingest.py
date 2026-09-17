@@ -17,9 +17,8 @@ from news.application.process import ProcessOutcome, ProcessState, process_raw_a
 from news.application.registry import adapter_for
 from news.domain.fingerprints import payload_hash
 from news.domain.identity import ExternalKey, MissingIdentity, external_key
+from news.logging import endpoint_context, ingestion_logger, run_context
 from news.models import IngestionRun, RawArticle, SourceEndpoint
-
-LOGGER = logging.getLogger("pulso.news.ingest")
 
 
 @dataclass(frozen=True)
@@ -127,23 +126,12 @@ def _summary(run: IngestionRun, *, retry_after: int | None = None) -> RunSummary
     )
 
 
-def _log_context(run: IngestionRun, endpoint: SourceEndpoint) -> dict:
-    return {
-        "run_id": run.pk,
-        "endpoint_id": endpoint.pk,
-        "source_id": endpoint.source_id,
-        "adapter_kind": endpoint.kind,
-        "trigger": run.trigger,
-        "attempt": run.attempt,
-        "task_id": run.task_id,
-    }
-
-
 def _finalize(
     run: IngestionRun,
     endpoint: SourceEndpoint,
     started: float,
     status: str,
+    logger: logging.LoggerAdapter,
     *,
     etag: str | None = None,
     last_modified: str | None = None,
@@ -181,23 +169,25 @@ def _finalize(
         if updates:
             SourceEndpoint.objects.filter(pk=endpoint.pk).update(**updates)
         run.save(update_fields=fields)
-    LOGGER.info(
+    logger.info(
         "News ingestion run finalized",
         extra={
-            **_log_context(run, endpoint),
             "status": run.status,
+            "error_kind": run.error_kind,
+            "http_status": run.http_status,
+            "will_retry": run.will_retry,
+            "duration_ms": run.duration_ms,
             "items_received": run.items_received,
             "items_rejected": run.items_rejected,
             "raw_created": run.raw_created,
             "raw_changed": run.raw_changed,
             "raw_unchanged": run.raw_unchanged,
-            "items_failed": run.items_failed,
             "items_processed": run.items_processed,
+            "items_failed": run.items_failed,
             "identity_duplicates": run.identity_duplicates,
             "content_duplicates": run.content_duplicates,
             "raw_rejected": run.raw_rejected,
             "source_identity_conflicts": run.source_identity_conflicts,
-            "duration_ms": run.duration_ms,
         },
     )
     return _summary(run, retry_after=retry_after)
@@ -292,7 +282,8 @@ def ingest_endpoint(
             task_id=task_id,
             started_at=timezone.now(),
         )
-    LOGGER.info("News ingestion run started", extra=_log_context(run, endpoint))
+    logger = ingestion_logger(**endpoint_context(endpoint), **run_context(run))
+    logger.info("News ingestion run started")
 
     request = EndpointFetchRequest(
         url=endpoint.url,
@@ -313,6 +304,7 @@ def ingest_endpoint(
             endpoint,
             started,
             IngestionRun.Status.FAILED,
+            logger,
             retry_after=error.retry_after,
         )
 
@@ -322,6 +314,7 @@ def ingest_endpoint(
             endpoint,
             started,
             IngestionRun.Status.NO_CHANGE,
+            logger,
             etag=result.etag,
             last_modified=result.last_modified,
         )
@@ -329,13 +322,9 @@ def ingest_endpoint(
     run.items_received = len(result.items) + len(result.rejected)
     run.items_rejected = len(result.rejected)
     for rejection in result.rejected:
-        LOGGER.warning(
+        logger.warning(
             "News item rejected by adapter",
-            extra={
-                **_log_context(run, endpoint),
-                "position": rejection.position,
-                "reason": rejection.reason,
-            },
+            extra={"position": rejection.position, "rejection_reason": rejection.reason},
         )
 
     limit = settings.NEWS_INGEST_MAX_ITEMS_PER_RUN
@@ -343,9 +332,9 @@ def ingest_endpoint(
     overflow = len(result.items) - len(accepted)
     if overflow:
         run.items_rejected += overflow
-        LOGGER.warning(
+        logger.warning(
             "News ingestion item limit applied",
-            extra={**_log_context(run, endpoint), "item_limit": limit, "overflow": overflow},
+            extra={"limit": limit, "overflow": overflow},
         )
 
     fetched_at = timezone.now()
@@ -353,22 +342,17 @@ def ingest_endpoint(
         identity = external_key(item.external_id, item.url)
         if isinstance(identity, MissingIdentity):
             run.items_rejected += 1
-            LOGGER.warning(
+            logger.warning(
                 "News item rejected during intake",
-                extra={
-                    **_log_context(run, endpoint),
-                    "position": position,
-                    "reason": "MISSING_IDENTITY",
-                },
+                extra={"position": position, "rejection_reason": "MISSING_IDENTITY"},
             )
             continue
         stored, truncated = _stored_payload(item)
         digest = payload_hash(stored)
         if truncated:
-            LOGGER.warning(
+            logger.warning(
                 "News item payload truncated",
                 extra={
-                    **_log_context(run, endpoint),
                     "position": position,
                     "external_key_kind": identity.kind.value,
                     "truncated": True,
@@ -389,16 +373,17 @@ def ingest_endpoint(
     )
     for raw_id in pending_ids:
         try:
-            outcome = process_raw_article(raw_id)
+            # The current run's context, not the row's receipt provenance: a
+            # replayed PENDING row belongs to an older ingestion_run.
+            outcome = process_raw_article(raw_id, logger=logger)
         except (
             Exception
         ) as error:  # isolate one processing row; never suppress fetch/intake defects
             run.items_failed += 1
-            LOGGER.error(
+            logger.error(
                 "News raw processing failed",
                 extra={
-                    **_log_context(run, endpoint),
-                    "raw_id": raw_id,
+                    "raw_article_id": raw_id,
                     "exception_class": type(error).__name__,
                 },
             )
@@ -417,6 +402,7 @@ def ingest_endpoint(
         endpoint,
         started,
         status,
+        logger,
         etag=result.etag,
         last_modified=result.last_modified,
     )

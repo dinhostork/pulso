@@ -2,6 +2,8 @@
 
 from datetime import timedelta
 
+from .environment import log_level
+
 INSTALLED_APPS = [
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -102,3 +104,42 @@ NEWS_INGEST_MAX_PAYLOAD_BYTES = 256 * 1024
 # titles with no body would link unrelated publications; a fixed application
 # constant, not an environment knob.
 NEWS_CONTENT_FINGERPRINT_MIN_CHARS = 200
+
+# One RUNNING ingestion run younger than this is assumed to be in flight: the
+# poll dispatcher skips its endpoint (#19) and `news_runs --stale` does not
+# report it (#20). One fixed operational constant, shared so the two views can
+# never disagree; not an environment knob.
+NEWS_STALE_RUNNING_SECONDS = 180
+# Default retention for finalized IngestionRun history, used by both
+# `news_prune_runs` and the optional weekly prune task (#20).
+NEWS_RUN_RETENTION_DAYS = 30
+
+# Structured operational logging (issue #20). Only the `pulso` tree is
+# configured: Django's and Celery's own loggers keep their default behavior,
+# including their tracebacks. Records are JSON lines carrying operational
+# identifiers, statuses and counts — never publication content (see
+# config/logging.py's allowlist).
+LOG_LEVEL = log_level("LOG_LEVEL")
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "pulso_json": {"()": "config.logging.JsonLinesFormatter"},
+    },
+    "handlers": {
+        "pulso_console": {
+            "class": "logging.StreamHandler",
+            "formatter": "pulso_json",
+        },
+    },
+    "loggers": {
+        "pulso": {
+            "handlers": ["pulso_console"],
+            "level": LOG_LEVEL,
+            # Structured records must not also reach the root handler as plain
+            # text. Tests attach their own handler to this logger instead of
+            # relying on propagation (see tests/news/conftest.py).
+            "propagate": False,
+        },
+    },
+}

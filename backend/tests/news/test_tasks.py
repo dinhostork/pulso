@@ -314,7 +314,7 @@ def test_operational_error_is_retried_a_bounded_number_of_times(monkeypatch, cap
         if record.message == "News raw processing database error"
     ]
     assert [record.attempt for record in records] == [0, 1, 2, 3]
-    assert all(record.raw_id == 11 for record in records)
+    assert all(record.raw_article_id == 11 for record in records)
     assert all(record.exception_class == "OperationalError" for record in records)
     assert not any(
         hasattr(record, field)

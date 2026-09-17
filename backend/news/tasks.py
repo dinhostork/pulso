@@ -16,24 +16,26 @@ Celery       → performs the future execution
 ```
 """
 
-import logging
 import random
 from datetime import timedelta
 from functools import partial
 
 from celery import shared_task
+from django.conf import settings
 from django.db import OperationalError, transaction
 from django.db.models import OuterRef, Subquery
 from django.utils import timezone
 
 from news.application.ingest import RunSummary
 from news.application.ingest import ingest_endpoint as ingest_endpoint_app
+from news.application.operations import prune_ingestion_runs as prune_ingestion_runs_app
 from news.application.ports import FetchErrorKind
 from news.application.process import ProcessOutcome
 from news.application.process import process_raw_article as process_raw_article_app
+from news.logging import ingestion_logger
 from news.models import IngestionRun, RawArticle, SourceEndpoint
 
-LOGGER = logging.getLogger("pulso.news.tasks")
+TASK_LOGGER = "pulso.news.tasks"
 
 TRIGGER_SCHEDULE = "SCHEDULE"
 TRIGGER_MANUAL = "MANUAL"
@@ -48,8 +50,6 @@ RETRY_JITTER_RATIO = 0.1
 # global limits for everything else).
 INGEST_SOFT_TIME_LIMIT_SECONDS = 150
 INGEST_TIME_LIMIT_SECONDS = 180
-# An endpoint with a RUNNING run younger than this is assumed to be in flight.
-RUNNING_RUN_GRACE_SECONDS = 180
 # Pending rows this old were missed by their own run's processing loop.
 PENDING_RECONCILE_AFTER_SECONDS = 600
 PENDING_RECONCILE_LIMIT = 1000
@@ -138,15 +138,19 @@ def ingest_endpoint(self, endpoint_id: int, *, trigger: str = TRIGGER_SCHEDULE) 
         return _run_payload(summary)
 
     countdown = _retry_countdown(summary, attempt)
-    LOGGER.warning(
+    ingestion_logger(
+        TASK_LOGGER,
+        endpoint_id=endpoint_id,
+        run_id=summary.run_id,
+        task_id=self.request.id or "",
+        attempt=attempt,
+        trigger=TRIGGER_RETRY if attempt else trigger,
+    ).warning(
         "News ingestion retry scheduled",
         extra={
-            "endpoint_id": endpoint_id,
-            "task_id": self.request.id or "",
-            "attempt": attempt,
             "countdown": countdown,
             "error_kind": summary.error_kind,
-            "run_id": summary.run_id,
+            "retry_after": summary.retry_after,
         },
     )
     raise self.retry(countdown=countdown)
@@ -164,11 +168,10 @@ def process_raw_article(self, raw_id: int) -> dict:
         outcome = process_raw_article_app(raw_id)
     except OperationalError as error:
         attempt = self.request.retries
-        LOGGER.warning(
+        ingestion_logger(TASK_LOGGER, task_id=self.request.id or "", attempt=attempt).warning(
             "News raw processing database error",
             extra={
-                "raw_id": raw_id,
-                "attempt": attempt,
+                "raw_article_id": raw_id,
                 "exception_class": type(error).__name__,
             },
         )
@@ -193,13 +196,13 @@ def poll_due_endpoints() -> dict:
     `skipped_inactive` counts endpoints that are themselves inactive or whose
     Source is inactive; such an endpoint is never dispatched, even when the
     other one of the pair is active. `skipped_running` counts endpoints whose
-    latest run is RUNNING and younger than RUNNING_RUN_GRACE_SECONDS; an older
+    latest run is RUNNING and younger than NEWS_STALE_RUNNING_SECONDS; an older
     RUNNING row does not block the endpoint once its interval has elapsed.
     Dispatch happens only after the selecting transaction commits.
     """
 
     now = timezone.now()
-    running_cutoff = now - timedelta(seconds=RUNNING_RUN_GRACE_SECONDS)
+    running_cutoff = now - timedelta(seconds=settings.NEWS_STALE_RUNNING_SECONDS)
     counts = {"dispatched": 0, "skipped_not_due": 0, "skipped_running": 0, "skipped_inactive": 0}
 
     with transaction.atomic():
@@ -238,8 +241,19 @@ def poll_due_endpoints() -> dict:
                 partial(ingest_endpoint.delay, endpoint.pk, trigger=TRIGGER_SCHEDULE)
             )
 
-    LOGGER.info("News due-endpoint poll completed", extra=dict(counts))
+    ingestion_logger(TASK_LOGGER).info("News due-endpoint poll completed", extra=dict(counts))
     return counts
+
+
+@shared_task
+def prune_ingestion_runs() -> dict:
+    """Apply the run-history retention rule weekly.
+
+    The rule lives in the application layer, shared with the operator command
+    `manage.py news_prune_runs`; this task only invokes it.
+    """
+
+    return {"deleted": prune_ingestion_runs_app()}
 
 
 @shared_task
@@ -262,7 +276,7 @@ def reconcile_pending_raw_articles() -> dict:
         for raw_id in raw_ids:
             transaction.on_commit(partial(process_raw_article.delay, raw_id))
 
-    LOGGER.info(
+    ingestion_logger(TASK_LOGGER).info(
         "News pending reconciliation completed",
         extra={"dispatched": len(raw_ids), "limit": PENDING_RECONCILE_LIMIT},
     )

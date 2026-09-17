@@ -20,7 +20,10 @@ from news.application.ports import (
     RejectedItem,
 )
 
-LOGGER = logging.getLogger(__name__)
+# Inside the `pulso` tree: this module parses source documents, so its
+# operational records must go through the same JSON formatter and the same
+# log-hygiene guarantee as the rest of News (#20).
+LOGGER = logging.getLogger("pulso.news.adapters.rss")
 RSS_ACCEPT = (
     "application/rss+xml, application/atom+xml, application/rdf+xml, application/xml, text/xml"
 )

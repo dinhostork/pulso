@@ -52,6 +52,7 @@ def test_defaults_schedule_both_news_entries_and_no_diagnostic():
     assert set(loaded.CELERY_BEAT_SCHEDULE) == {
         "news-poll-due-endpoints",
         "news-reconcile-pending",
+        "news-prune-runs",
     }
     assert loaded.CELERY_BEAT_SCHEDULE["news-poll-due-endpoints"]["schedule"] == 300.0
     assert loaded.CELERY_BEAT_SCHEDULE["news-reconcile-pending"]["schedule"] == 3600.0
@@ -89,11 +90,20 @@ def test_invalid_news_ingestion_flag_is_a_configuration_error(value):
     [
         ("false", "false", set()),
         ("true", "false", {"diagnostic-ping"}),
-        ("false", "true", {"news-poll-due-endpoints", "news-reconcile-pending"}),
+        (
+            "false",
+            "true",
+            {"news-poll-due-endpoints", "news-reconcile-pending", "news-prune-runs"},
+        ),
         (
             "true",
             "true",
-            {"diagnostic-ping", "news-poll-due-endpoints", "news-reconcile-pending"},
+            {
+                "diagnostic-ping",
+                "news-poll-due-endpoints",
+                "news-reconcile-pending",
+                "news-prune-runs",
+            },
         ),
     ],
 )
@@ -111,6 +121,7 @@ def test_scheduled_task_names_exist():
         "diagnostics.tasks.diagnostic_ping",
         tasks.poll_due_endpoints.name,
         tasks.reconcile_pending_raw_articles.name,
+        tasks.prune_ingestion_runs.name,
     }
 
 

@@ -228,7 +228,7 @@ def test_same_canonical_other_endpoint_is_identity_duplicate(endpoint, publisher
     assert summary.identity_duplicates == 2 and summary.raw_rejected == 0
 
 
-def test_cross_source_canonical_url_rejects_the_delivery(endpoint, monkeypatch, caplog):
+def test_cross_source_canonical_url_rejects_the_delivery(endpoint, monkeypatch, pulso_caplog):
     run_fixture(endpoint, monkeypatch, "rss_valid.xml")
     owned = {
         url: snapshot(Article.objects.get(canonical_url=url))
@@ -237,7 +237,7 @@ def test_cross_source_canonical_url_rejects_the_delivery(endpoint, monkeypatch, 
     aggregator = make_source("aggregator")
     other = make_endpoint(aggregator, "https://aggregator.example/rss")
 
-    caplog.clear()
+    pulso_caplog.clear()
     summary = run_fixture(other, monkeypatch, "rss_same_canonical_other_source.xml")
 
     rejected = list(RawArticle.objects.filter(endpoint=other).order_by("pk"))
@@ -256,7 +256,7 @@ def test_cross_source_canonical_url_rejects_the_delivery(endpoint, monkeypatch, 
 
     warnings = [
         record
-        for record in caplog.records
+        for record in pulso_caplog.records
         if getattr(record, "existing_source_slug", None) is not None
     ]
     assert len(warnings) == 2

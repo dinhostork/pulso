@@ -22,6 +22,26 @@ def boolean(name: str, *, default: bool = False) -> bool:
     return normalized == "true"
 
 
+LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+
+def log_level(name: str, *, default: str = "INFO") -> str:
+    """Parse a logging level name; an unset variable uses the default.
+
+    An unrecognized level is a configuration error rather than a silent
+    fallback: an operator who misspells it must find out at startup, not by
+    noticing that records went missing.
+    """
+
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().upper()
+    if normalized not in LOG_LEVELS:
+        raise ImproperlyConfigured(f"{name} must be one of {', '.join(LOG_LEVELS)}")
+    return normalized
+
+
 def positive_int(name: str, *, default: int) -> int:
     """Parse a positive integer setting; an unset variable uses the default.
 

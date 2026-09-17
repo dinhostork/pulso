@@ -61,3 +61,9 @@ CELERY_DIAGNOSTIC_BEAT_ENABLED = False
 NEWS_INGESTION_ENABLED = False
 NEWS_POLL_DISPATCH_INTERVAL_SECONDS = 300
 CELERY_BEAT_SCHEDULE = {}
+
+# Tests assert on records from the real JSON formatter inherited from
+# config.common. The level is fixed here so a developer's own LOG_LEVEL can
+# never hide a record a log test depends on.
+LOG_LEVEL = "DEBUG"
+LOGGING["loggers"]["pulso"]["level"] = LOG_LEVEL  # noqa: F405

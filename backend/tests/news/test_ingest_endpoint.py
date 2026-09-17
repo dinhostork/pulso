@@ -113,7 +113,7 @@ def test_fetch_errors_and_304(endpoint, monkeypatch):
 
 
 @pytest.mark.django_db
-def test_payload_and_item_caps(endpoint, monkeypatch, caplog):
+def test_payload_and_item_caps(endpoint, monkeypatch, pulso_caplog):
     huge = item(content_html="x" * (settings.NEWS_INGEST_MAX_PAYLOAD_BYTES + 1000))
     run(endpoint, monkeypatch, FetchResult(items=(huge,)))
     raw = RawArticle.objects.get()
@@ -144,8 +144,9 @@ def test_processing_failure_and_replay(endpoint, monkeypatch):
     )
     called = []
 
-    def process(pk):
+    def process(pk, *, logger=None):
         called.append(pk)
+        assert logger is not None, "the ingestion loop must pass its run logger"
         if pk == old.pk:
             raise RuntimeError("secret")
         # The loop counts dedup outcomes from this value (#18), so the double
@@ -251,7 +252,7 @@ def test_intake_boundary_is_independent_of_adapter_fields(
 
 
 @pytest.mark.django_db
-def test_rss_fixture_idempotency_duplicate_and_malformed(endpoint, monkeypatch, caplog):
+def test_rss_fixture_idempotency_duplicate_and_malformed(endpoint, monkeypatch, pulso_caplog):
     first = fixture_run(endpoint, monkeypatch, "rss_valid.xml")
     second = fixture_run(endpoint, monkeypatch, "rss_valid.xml")
     assert first.raw_created == 10 and first.status == "SUCCEEDED"
@@ -270,7 +271,10 @@ def test_rss_fixture_idempotency_duplicate_and_malformed(endpoint, monkeypatch, 
         and malformed.items_rejected == 1
         and RawArticle.objects.count() == 2
     )
-    assert any(getattr(record, "reason", None) == "MISSING_IDENTITY" for record in caplog.records)
+    assert any(
+        getattr(record, "rejection_reason", None) == "MISSING_IDENTITY"
+        for record in pulso_caplog.records
+    )
 
 
 @pytest.mark.django_db
@@ -288,7 +292,7 @@ def test_rss_id_only_fixture_and_changed_revision(endpoint, monkeypatch):
 
 
 @pytest.mark.django_db
-def test_failed_run_and_processing_logs_hide_sentinels(endpoint, monkeypatch, caplog):
+def test_failed_run_and_processing_logs_hide_sentinels(endpoint, monkeypatch, pulso_caplog):
     sentinel = "SECRET_HEADER_BODY_CONFIG_PAYLOAD"
     SourceEndpoint.objects.filter(pk=endpoint.pk).update(
         adapter_config={"credential_env": sentinel}
@@ -297,6 +301,6 @@ def test_failed_run_and_processing_logs_hide_sentinels(endpoint, monkeypatch, ca
     monkeypatch.setattr("news.application.ingest.adapter_for", lambda _: FakeAdapter(error=error))
     ingest_endpoint(endpoint.pk, trigger="MANUAL")
     assert (
-        sentinel not in caplog.text
+        sentinel not in pulso_caplog.text
         and sentinel not in IngestionRun.objects.latest("pk").error_message
     )

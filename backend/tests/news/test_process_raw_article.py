@@ -128,7 +128,7 @@ def test_tracking_urls_share_canonical_identity_without_content_dedup(endpoint, 
         (make_payload(url="mailto:editor@example.com"), "MISSING_CANONICAL_URL"),
     ],
 )
-def test_normalization_rejections_preserve_raw_payload(endpoint, payload, reason, caplog):
+def test_normalization_rejections_preserve_raw_payload(endpoint, payload, reason, pulso_caplog):
     original = deepcopy(payload)
     raw = make_raw(endpoint, key=reason, payload=payload)
     assert process_raw_article(raw.pk).state == ProcessState.REJECTED
@@ -136,7 +136,11 @@ def test_normalization_rejections_preserve_raw_payload(endpoint, payload, reason
     assert raw.status == RawArticle.Status.REJECTED
     assert raw.rejection_reason == reason and raw.article_id is None
     assert raw.payload == original and Article.objects.count() == 0
-    record = next(record for record in caplog.records if getattr(record, "reason", None) == reason)
+    record = next(
+        record
+        for record in pulso_caplog.records
+        if getattr(record, "rejection_reason", None) == reason
+    )
     assert record.raw_article_id == raw.pk and record.external_key == raw.external_key
     assert not any(hasattr(record, field) for field in ("payload", "title", "body_text"))
 

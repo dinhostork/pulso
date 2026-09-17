@@ -16,9 +16,10 @@ from django.utils import timezone
 
 from news.domain.dedup import ArticleMatch, Decision, DecisionKind, decide
 from news.domain.normalization import NormalizedArticle, Rejection, normalize
+from news.logging import endpoint_context, ingestion_logger
 from news.models import Article, RawArticle, Source
 
-LOGGER = logging.getLogger("pulso.news.process")
+PROCESS_LOGGER = "pulso.news.process"
 
 
 class ProcessState(StrEnum):
@@ -87,11 +88,17 @@ def _reject(
     )
 
 
-def _reject_normalization(raw: RawArticle, reason: str) -> ProcessOutcome:
+def _reject_normalization(
+    raw: RawArticle, reason: str, logger: logging.LoggerAdapter
+) -> ProcessOutcome:
     result = _reject(raw, reason)
-    LOGGER.warning(
+    logger.warning(
         "Raw article normalization rejected",
-        extra={"raw_article_id": raw.pk, "external_key": raw.external_key, "reason": reason},
+        extra={
+            "raw_article_id": raw.pk,
+            "external_key": raw.external_key,
+            "rejection_reason": reason,
+        },
     )
     return result
 
@@ -124,6 +131,21 @@ def _finish(raw: RawArticle, article: Article, outcome: str) -> ProcessOutcome:
         state=ProcessState.PROCESSED,
         outcome=outcome,
         article_id=article.pk,
+    )
+
+
+def _log_outcome(logger: logging.LoggerAdapter, outcome: ProcessOutcome) -> None:
+    """One record per processed revision, carrying only its result."""
+
+    logger.info(
+        "Raw article processed",
+        extra={
+            "raw_article_id": outcome.raw_id,
+            "state": outcome.state,
+            "outcome": outcome.outcome,
+            "rejection_reason": outcome.rejection_reason,
+            "article_id": outcome.article_id,
+        },
     )
 
 
@@ -210,11 +232,14 @@ def _update(raw: RawArticle, normalized: NormalizedArticle, article: Article) ->
 
 
 def _reject_identity_conflict(
-    raw: RawArticle, normalized: NormalizedArticle, decision: Decision
+    raw: RawArticle,
+    normalized: NormalizedArticle,
+    decision: Decision,
+    logger: logging.LoggerAdapter,
 ) -> ProcessOutcome:
     reason = RawArticle.Outcome.IDENTITY_CONFLICT
     result = _reject(raw, reason, outcome=reason)
-    LOGGER.warning(
+    logger.warning(
         "News publication identity conflict",
         extra={
             "raw_article_id": raw.pk,
@@ -227,12 +252,15 @@ def _reject_identity_conflict(
 
 
 def _reject_source_identity_conflict(
-    raw: RawArticle, normalized: NormalizedArticle, existing: Article
+    raw: RawArticle,
+    normalized: NormalizedArticle,
+    existing: Article,
+    logger: logging.LoggerAdapter,
 ) -> ProcessOutcome:
     reason = RawArticle.Outcome.SOURCE_IDENTITY_CONFLICT
     # The existing Article is never touched; the link is investigation evidence.
     result = _reject(raw, reason, outcome=reason, article=existing)
-    LOGGER.warning(
+    logger.warning(
         "News canonical URL owned by another Source",
         extra={
             "raw_article_id": raw.pk,
@@ -252,6 +280,7 @@ def _apply(
     normalized: NormalizedArticle,
     decision: Decision,
     candidates: _Candidates,
+    logger: logging.LoggerAdapter,
 ) -> ProcessOutcome:
     """Turn a decision that creates no Article into RawArticle state."""
 
@@ -262,11 +291,15 @@ def _apply(
             raw, candidates.of(decision.article.id), RawArticle.Outcome.IDENTITY_DUPLICATE
         )
     if decision.kind is DecisionKind.IDENTITY_CONFLICT:
-        return _reject_identity_conflict(raw, normalized, decision)
-    return _reject_source_identity_conflict(raw, normalized, candidates.of(decision.article.id))
+        return _reject_identity_conflict(raw, normalized, decision, logger)
+    return _reject_source_identity_conflict(
+        raw, normalized, candidates.of(decision.article.id), logger
+    )
 
 
-def _persist(raw: RawArticle, normalized: NormalizedArticle) -> ProcessOutcome:
+def _persist(
+    raw: RawArticle, normalized: NormalizedArticle, logger: logging.LoggerAdapter
+) -> ProcessOutcome:
     source = raw.endpoint.source
     decision, candidates = _decide(source, normalized)
     if _inserts_article(decision.kind):
@@ -279,11 +312,21 @@ def _persist(raw: RawArticle, normalized: NormalizedArticle) -> ProcessOutcome:
             if _inserts_article(decision.kind):
                 # Not the expected identity race; never swallow or retry blindly.
                 raise
-    return _apply(raw, normalized, decision, candidates)
+    return _apply(raw, normalized, decision, candidates, logger)
 
 
-def process_raw_article(raw_id: int) -> ProcessOutcome:
-    """Lock one row without waiting and process each pending row exactly once."""
+def process_raw_article(
+    raw_id: int, *, logger: logging.LoggerAdapter | None = None
+) -> ProcessOutcome:
+    """Lock one row without waiting and process each pending row exactly once.
+
+    `logger` carries the context of the execution doing the processing. The
+    ingestion loop passes its own run logger, so a replayed row is logged
+    against the run that is processing it now, not against the older run that
+    received it; `RawArticle.ingestion_run` stays untouched receipt provenance.
+    A task-driven call passes nothing and gets the Source/endpoint context of
+    the row, without run fields, because no run is processing it.
+    """
 
     with transaction.atomic():
         raw = (
@@ -297,12 +340,20 @@ def process_raw_article(raw_id: int) -> ProcessOutcome:
             .first()
         )
         if raw is None:
-            return ProcessOutcome(raw_id=raw_id, state=ProcessState.LOCKED)
+            outcome = ProcessOutcome(raw_id=raw_id, state=ProcessState.LOCKED)
+            _log_outcome(logger or ingestion_logger(PROCESS_LOGGER), outcome)
+            return outcome
+        contextual = logger or ingestion_logger(PROCESS_LOGGER, **endpoint_context(raw.endpoint))
         if raw.status != RawArticle.Status.PENDING:
-            return ProcessOutcome(raw_id=raw_id, state=ProcessState.SKIPPED)
+            outcome = ProcessOutcome(raw_id=raw_id, state=ProcessState.SKIPPED)
+            _log_outcome(contextual, outcome)
+            return outcome
         normalized = normalize(
             raw.payload, source_default_language=raw.endpoint.source.default_language
         )
         if isinstance(normalized, Rejection):
-            return _reject_normalization(raw, normalized.reason)
-        return _persist(raw, normalized)
+            outcome = _reject_normalization(raw, normalized.reason, contextual)
+        else:
+            outcome = _persist(raw, normalized, contextual)
+        _log_outcome(contextual, outcome)
+        return outcome
