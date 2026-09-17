@@ -15,7 +15,7 @@ independent deployable services. This maps
 | `backend/accounts/` | Account identity, Django model integration, initial migration and JWT login/logout/refresh/current-user endpoints (issue #6, ADR-0009) |
 | `backend/database/` | Shared PostgreSQL extension migration; no product models |
 | `backend/diagnostics/` | Temporary Celery/Redis infrastructure diagnostic (issue #4); no product models or domain rules |
-| `backend/news/` | News-owned Source, SourceEndpoint, IngestionRun, RawArticle and Article persistence; `adapters/` fetch and parse feeds, `application/` runs ingestion, processing and operations, `domain/` holds pure rules, `tasks.py` orchestrates Celery work, `logging.py` supplies context, and management commands provide the operator surface. See the [News Core architecture](news-core.md). |
+| `backend/news/` | News-owned Source, SourceEndpoint, IngestionRun, RawArticle, Article, Story and StoryArticle persistence; `adapters/` fetch and parse feeds, `application/` runs ingestion, processing and operations, `domain/` holds pure rules, `tasks.py` orchestrates Celery work, `logging.py` supplies context, and management commands provide the operator surface. See the [News Core architecture](news-core.md). |
 
 Accounts uses Django's `AbstractUser` and a database-generated `BigAutoField`
 primary key. Future relationships use `settings.AUTH_USER_MODEL` in model fields
@@ -34,7 +34,9 @@ The rules those services coordinate stay in `domain/` as pure functions —
 `urls.py`, `fingerprints.py`, `identity.py`, `normalization.py` and `dedup.py`
 import no Django, no models and no settings. `tasks.py` implements Celery
 orchestration, `management/commands/` provides operator commands, and
-`logging.py` supplies structured context; Story behavior is future work. The
+`logging.py` supplies structured context. Story and StoryArticle persistence
+exists; embeddings, candidate retrieval, matching, enrichment, synthesis and
+Story processing tasks are future work. The
 route registry is the integration point for future HTTP adapters; it must not accumulate domain
 rules.
 
@@ -63,7 +65,7 @@ interface rather than another module's internal models.
 | Module | Owns | Current state |
 | --- | --- | --- |
 | Accounts | Stable user identity and account authentication foundation | User model plus JWT login/logout/refresh/current-user endpoints ([ADR-0009](../adr/0009-jwt-mobile-authentication.md)); no registration or profile fields |
-| News | Source publications, Articles, Stories and source-grounded factual synthesis | Persistence plus RSS/JSON Feed ingestion, deterministic normalization and deterministic deduplication ([ADR-0010](../adr/0010-article-identity-and-deduplication.md)); Story planned |
+| News | Source publications, Articles, Stories and source-grounded factual synthesis | Persistence plus RSS/JSON Feed ingestion, deterministic normalization and deterministic deduplication ([ADR-0010](../adr/0010-article-identity-and-deduplication.md)); Story and StoryArticle persistence, where Story associations are derived, reprocessable state that never cascades into Article provenance; Story embeddings, candidate retrieval, matching, enrichment, synthesis and processing tasks planned |
 | Opinion | Human Opinions, declared positions, derived Perspectives and Pulse | Planned; no package or models |
 | Recommendation | Discovery ranking, interests and ranking signals | Planned; no package or models |
 | Moderation | Moderation decisions and eligibility policies, coordinated with content owners | Planned; policies and interfaces remain undecided |

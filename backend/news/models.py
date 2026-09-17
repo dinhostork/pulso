@@ -1,5 +1,6 @@
-"""Publication provenance and normalized Article persistence."""
+"""Publication provenance, normalized Article and derived Story persistence."""
 
+import json
 import re
 
 from django.conf import settings
@@ -7,6 +8,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator
 from django.db import models
 from django.db.models import F, Q
+from django.utils import timezone
 
 from news.adapters.targets import assert_allowed_target
 from news.application.ports import FetchError
@@ -274,3 +276,122 @@ class Article(models.Model):
                 name="news_article_not_self_duplicate",
             ),
         ]
+
+
+class Story(models.Model):
+    """One event described by one or more Articles (ADR-0003: Article != Story).
+
+    `status` is the Story lifecycle:
+
+    - `ACTIVE`: eligible to receive new Articles and to be returned as a
+      matching candidate.
+    - `ARCHIVED`: ineligible for both; candidate retrieval filters on it.
+
+    Zero-member rule: a Story whose last `StoryArticle` is removed by
+    reprocessing or reassignment must not remain an `ACTIVE` candidate. It is
+    archived rather than deleted, so its id stays stable for diagnostics. The
+    schema therefore allows a Story with no members; the transition itself is
+    not performed here.
+    """
+
+    class Status(models.TextChoices):
+        ACTIVE = "ACTIVE", "Active"
+        ARCHIVED = "ARCHIVED", "Archived"
+
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
+    language = models.CharField(max_length=35)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["status"], name="news_story_status_idx")]
+
+
+EVIDENCE_MAX_BYTES = 4096
+_EVIDENCE_CONTENT_KEYS = frozenset({"title", "body_text", "description", "payload"})
+
+
+def _content_keys(value, path=""):
+    """Yield evidence key paths only; values must never reach error messages."""
+
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            key_path = f"{path}.{key}" if path else str(key)
+            if str(key) in _EVIDENCE_CONTENT_KEYS:
+                yield key_path
+            else:
+                yield from _content_keys(nested, key_path)
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            yield from _content_keys(nested, f"{path}[{index}]")
+
+
+class StoryArticle(models.Model):
+    """Derived, reprocessable association between one Story and one Article.
+
+    Deleting and rebuilding these rows must always be safe: the Story side
+    cascades, while the Article side is protected so derived state never
+    removes publication provenance.
+
+    At most one primary Story association per Article is a v0.3 persistence
+    and assignment invariant, not a permanent one-Story-per-Article domain
+    invariant. It records which Story currently leads an Article's event
+    assignment under the v0.3 matcher policy; it is not a claim that an Article
+    belongs to exactly one event. Non-primary associations are unconstrained, so
+    the many-to-many model of ADR-0003 stays representable.
+
+    `evidence` is bounded operator-facing diagnostic metadata: it may not
+    exceed `EVIDENCE_MAX_BYTES` nor carry publication text.
+    """
+
+    class Method(models.TextChoices):
+        CREATED_STORY = "CREATED_STORY", "Created story"
+        MATCHED = "MATCHED", "Matched"
+        MANUAL = "MANUAL", "Manual"
+
+    # The unique (story, article) and (story, associated_at) indexes both lead
+    # with `story`, so the implicit FK index would be redundant.
+    story = models.ForeignKey(
+        Story, on_delete=models.CASCADE, related_name="story_articles", db_index=False
+    )
+    article = models.ForeignKey(Article, on_delete=models.PROTECT, related_name="story_articles")
+    is_primary = models.BooleanField(default=False)
+    associated_at = models.DateTimeField(default=timezone.now)
+    method = models.CharField(max_length=16, choices=Method.choices)
+    similarity = models.FloatField(null=True, blank=True)
+    matcher_key = models.CharField(max_length=128, blank=True)
+    evidence = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["story", "article"], name="news_storyarticle_story_article_unique"
+            ),
+            models.UniqueConstraint(
+                fields=["article"],
+                condition=Q(is_primary=True),
+                name="news_storyarticle_one_primary_per_article",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["story", "associated_at"], name="news_storyart_membership_idx"),
+        ]
+
+    def clean(self):
+        super().clean()
+        if not isinstance(self.evidence, dict):
+            raise ValidationError({"evidence": "Evidence must be an object."})
+        errors = [
+            f"Publication content key is forbidden: {key}" for key in _content_keys(self.evidence)
+        ]
+        size = len(
+            json.dumps(self.evidence, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        )
+        if size > EVIDENCE_MAX_BYTES:
+            errors.append(f"Evidence exceeds {EVIDENCE_MAX_BYTES} bytes.")
+        if errors:
+            raise ValidationError({"evidence": errors})
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        return super().save(*args, **kwargs)
