@@ -1,0 +1,34 @@
+{
+  "version": "https://jsonfeed.org/version/1.1",
+  "title": "Pulso fixture feed",
+  "language": "en-US",
+  "items": [
+    {
+      "id": "story-1",
+      "url": "https://news.example/story/1?utm_source=fixture",
+      "title": "HTML story",
+      "content_html": "<p>HTML body</p>",
+      "content_text": "Ignored fallback",
+      "summary": "Source summary",
+      "date_published": "2026-09-17T07:00:00-03:00",
+      "date_modified": "2026-09-17T10:30:00.125Z",
+      "authors": [{"name": "Author One", "url": "https://news.example/author"}, {"name": "Author Two"}],
+      "language": "pt-BR",
+      "tags": ["Politics", "World"],
+      "external_url": "mailto:source@news.example",
+      "attachments": [{"url": "https://cdn.example/audio.mp3", "mime_type": "audio/mpeg", "title": "Audio", "size_in_bytes": 12345, "duration_in_seconds": 12.5, "data": "MUST_NOT_COPY"}]
+    },
+    {
+      "id": "story-2",
+      "url": "https://news.example/story/2",
+      "title": "Text story",
+      "content_text": "Plain source text",
+      "date_published": "2026-09-17T10:00:00Z",
+      "author": {"name": "Legacy Author", "avatar": "MUST_NOT_COPY"}
+    },
+    {"id": "id-only", "title": "ID-only story", "content_text": "Body without URL"},
+    {"url": "mailto:editor@news.example", "title": "URL-only story", "content_text": "Body without ID"},
+    {"id": "invalid-date", "url": "https://news.example/invalid-date", "title": "Invalid dates", "date_published": "not-a-date", "date_modified": "yesterday"},
+    {"id": "story-1", "url": "https://news.example/story/1", "title": "Duplicate provider ID", "content_text": "Keep as separate item"}
+  ]
+}

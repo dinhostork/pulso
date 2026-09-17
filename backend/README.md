@@ -58,7 +58,13 @@ bootstrap, not a complete production deployment configuration.
 News source endpoints are validated against all resolved IP addresses when
 saved, and the shared HTTP fetcher checks each request and redirect again.
 Only HTTP(S) targets and RSS/XML/JSON/text feed media types are accepted;
-`text/html` is refused. RSS and JSON Feed parsers arrive in later issues.
+`text/html` is refused. RSS/Atom and JSON Feed syndication use the same bounded
+fetcher. JSON Feed needs no credentials in v0.2.0.
+
+`adapter_config["credential_env"]` is reserved for future credentialed source
+adapters. It stores the **name** of an environment variable (for example,
+`NEWS_PROVIDER_API_TOKEN`), never the secret value. The JSON Feed adapter ignores
+this setting and sends no credential header.
 
 | Setting | Default | Behavior |
 | --- | --- | --- |
