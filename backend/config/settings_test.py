@@ -62,6 +62,10 @@ NEWS_INGESTION_ENABLED = False
 NEWS_POLL_DISPATCH_INTERVAL_SECONDS = 300
 CELERY_BEAT_SCHEDULE = {}
 
+# The default suite embeds with the offline deterministic double; it never
+# loads or downloads a real model (#25).
+NEWS_EMBEDDING_PROVIDER = "deterministic"
+
 # Tests assert on records from the real JSON formatter inherited from
 # config.common. The level is fixed here so a developer's own LOG_LEVEL can
 # never hide a record a log test depends on.

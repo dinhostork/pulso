@@ -105,6 +105,15 @@ NEWS_INGEST_MAX_PAYLOAD_BYTES = 256 * 1024
 # constant, not an environment knob.
 NEWS_CONTENT_FINGERPRINT_MIN_CHARS = 200
 
+# Story semantic embeddings (#25). `NEWS_EMBEDDING_PROVIDER` names one provider
+# (`local` or `deterministic`) and carries no options, so no credential can be
+# configured for it. The bounds are fixed application constants: the batch
+# size caps one provider call, and each Article input is cut to at most
+# NEWS_EMBEDDING_MAX_INPUT_CHARS code points (see news/domain/embeddings.py).
+NEWS_EMBEDDING_PROVIDER = "local"
+NEWS_EMBEDDING_MAX_BATCH = 32
+NEWS_EMBEDDING_MAX_INPUT_CHARS = 2000
+
 # One RUNNING ingestion run younger than this is assumed to be in flight: the
 # poll dispatcher skips its endpoint (#19) and `news_runs --stale` does not
 # report it (#20). One fixed operational constant, shared so the two views can

@@ -7,11 +7,13 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator
 from django.db import models
-from django.db.models import F, Q
+from django.db.models import F, Func, Q
 from django.utils import timezone
+from pgvector.django import VectorField
 
 from news.adapters.targets import assert_allowed_target
 from news.application.ports import FetchError
+from news.application.story_ports import MAX_EMBEDDING_DIMENSION, MAX_MODEL_KEY_LENGTH
 
 
 class Source(models.Model):
@@ -395,3 +397,83 @@ class StoryArticle(models.Model):
     def save(self, *args, **kwargs):
         self.clean()
         return super().save(*args, **kwargs)
+
+
+def _embedding_constraints(prefix):
+    """Checks shared by every stored vector: a nonempty model key and an exact dimension."""
+
+    return [
+        models.CheckConstraint(condition=~Q(model_key=""), name=f"{prefix}_model_key_nonempty"),
+        models.CheckConstraint(
+            condition=Q(dimension__gte=1) & Q(dimension__lte=MAX_EMBEDDING_DIMENSION),
+            name=f"{prefix}_dimension_range",
+        ),
+        # The column is dimension-agnostic because models differ; this keeps
+        # each row's vector exactly as long as its recorded dimension.
+        models.CheckConstraint(
+            condition=Q(
+                dimension=Func(
+                    F("vector"), function="vector_dims", output_field=models.IntegerField()
+                )
+            ),
+            name=f"{prefix}_vector_matches_dimension",
+        ),
+    ]
+
+
+class ArticleEmbedding(models.Model):
+    """Derived semantic vector of one Article under one embedding model.
+
+    Rebuildable at any time (ADR-0004): deleting these rows loses nothing that
+    cannot be recomputed, and generating them never writes to `Article`.
+    Vectors are only comparable within one `model_key`.
+    """
+
+    # The unique (article, model_key) index leads with `article`, so the
+    # implicit FK index would be redundant.
+    article = models.ForeignKey(
+        Article, on_delete=models.PROTECT, related_name="embeddings", db_index=False
+    )
+    model_key = models.CharField(max_length=MAX_MODEL_KEY_LENGTH)
+    dimension = models.PositiveSmallIntegerField()
+    vector = VectorField()
+    input_chars = models.PositiveIntegerField()
+    generated_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["article", "model_key"], name="news_articleemb_article_model_unique"
+            ),
+            *_embedding_constraints("news_articleemb"),
+        ]
+        indexes = [models.Index(fields=["model_key"], name="news_articleemb_model_key_idx")]
+
+
+class StoryEmbedding(models.Model):
+    """Derived semantic vector of one Story under one embedding model.
+
+    `member_count` is how many member Articles the vector was computed from,
+    so a later refresh can tell a stale representation from a current one.
+    """
+
+    story = models.ForeignKey(
+        Story, on_delete=models.CASCADE, related_name="embeddings", db_index=False
+    )
+    model_key = models.CharField(max_length=MAX_MODEL_KEY_LENGTH)
+    dimension = models.PositiveSmallIntegerField()
+    vector = VectorField()
+    member_count = models.PositiveIntegerField()
+    generated_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["story", "model_key"], name="news_storyemb_story_model_unique"
+            ),
+            models.CheckConstraint(
+                condition=Q(member_count__gte=1), name="news_storyemb_member_count_positive"
+            ),
+            *_embedding_constraints("news_storyemb"),
+        ]
+        indexes = [models.Index(fields=["model_key"], name="news_storyemb_model_key_idx")]

@@ -390,6 +390,81 @@ the command and the optional weekly schedule apply exactly the same logic. When
 `NEWS_INGESTION_ENABLED` is true, Beat also runs `news-prune-runs` every
 604800 s (weekly) with the same 30-day default.
 
+## Story embeddings
+
+Story matching compares semantic vectors of Articles and Stories (issue #25).
+They are **derived data** ([ADR-0004](../docs/adr/0004-ai-is-not-a-source.md)):
+stored in PostgreSQL/pgvector as `ArticleEmbedding` and `StoryEmbedding`,
+rebuildable at any time, and generating them never writes to `Article`,
+`RawArticle`, `Story` or `StoryArticle`. Deleting every embedding row and
+running the services again reproduces them.
+
+The application sees only the `EmbeddingProvider` protocol
+(`news/application/story_ports.py`); `news/application/embeddings.py`
+provides `embed_article`, `embed_articles` and `embed_story`. Nothing
+dispatches them automatically yet.
+
+### `model_key`
+
+Every stored vector records the identity of the model that produced it as
+`model_key = provider:model@revision`, plus its `dimension`. Vectors are only
+comparable within one `model_key`. A row is created once per
+(`article`/`story`, `model_key`) and later calls return it unchanged; a new
+model or revision gets its own rows and never replaces the old ones. A vector
+whose length differs from the model's dimension, or from the dimension already
+stored for that `model_key`, fails with an explicit error naming both
+dimensions: nothing is truncated, padded or stored. Error messages never
+include Article text.
+
+A Story vector is the unit-length mean of its member Articles' vectors, and
+`member_count` records how many members it was computed from.
+
+### Settings and input bounds
+
+| Setting | Value | Meaning |
+| --- | --- | --- |
+| `NEWS_EMBEDDING_PROVIDER` | `local` (tests: `deterministic`) | Provider name only; it takes no options, so no credential can be configured for it. |
+| `NEWS_EMBEDDING_MAX_BATCH` | `32` | Most texts sent in one provider call. |
+| `NEWS_EMBEDDING_MAX_INPUT_CHARS` | `2000` | Most characters embedded per Article. |
+
+These are fixed application constants in `config/common.py`, not environment
+variables. An Article's input is its title, then description, then body text,
+each with whitespace collapsed, blank parts omitted and parts separated by a
+blank line. The result is cut to `NEWS_EMBEDDING_MAX_INPUT_CHARS` code points
+with trailing whitespace removed, so the title always comes first
+(`news/domain/embeddings.py`).
+
+### Providers
+
+- `deterministic`: an in-repository double that hashes words with SHA-256 into
+  64 dimensions. It needs no network or model file and returns identical
+  vectors in every process. The default test suite uses only this provider.
+- `local`: [fastembed](https://github.com/qdrant/fastembed) running
+  `BAAI/bge-small-en-v1.5` (384 dimensions, MIT licence) on the CPU through
+  ONNX Runtime. It is free and sends nothing anywhere. The weights (about 65 MB)
+  are pinned to one Hugging Face revision, so its `model_key` is
+  `fastembed:BAAI/bge-small-en-v1.5@52398278842e`.
+
+The local model is **optional**. `fastembed` lives in the `embeddings`
+dependency group, which `uv sync --locked`, CI and the Docker image do not
+install. Importing Django or starting the backend never loads or downloads it.
+The adapter only loads files already on disk; without the group or the files,
+embedding fails with a clear error instead of downloading.
+
+To opt in, from `backend/`:
+
+```bash
+uv sync --locked --group embeddings
+# One-off download into the Hugging Face cache (HF_HOME, default ~/.cache/huggingface),
+# then an offline check that prints the model_key and dimension:
+uv run --locked --group embeddings python -m news.adapters.local_embeddings
+# The opt-in test runs with the public-DNS guard active, proving offline use:
+uv run --locked --group embeddings pytest -m local_embedding
+```
+
+The `local_embedding` test is excluded from the default `pytest` run, just as
+`celery_smoke` is. A later plain `uv sync --locked` removes the group again.
+
 ## Local Compose stack
 
 Prerequisites: Docker Engine with BuildKit and Docker Compose v2.20 or newer
