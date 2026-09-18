@@ -125,6 +125,30 @@ NEWS_STORY_CANDIDATE_LIMIT = 10
 NEWS_STORY_CANDIDATE_MAX_DISTANCE = 0.5
 NEWS_STORY_CANDIDATE_WINDOW_HOURS = 168
 
+# Story matching policy (#28). A candidate Story is joined when its cosine
+# distance is <= NEWS_STORY_MATCH_MAX_DISTANCE and its latest member was
+# published within NEWS_STORY_MATCH_MAX_TIME_GAP_HOURS of the Article; anything
+# else starts a new Story. Both values are part of the matcher_key
+# (news/domain/story_matching.py), so changing one changes the key.
+#
+# Evidence: the #26 corpus (schema_version 1, 26 Articles, 12 events), embedded
+# with the local model fastembed:BAAI/bge-small-en-v1.5@52398278842e and matched
+# in publication order (tests/news/test_story_matching_corpus.py). Measured
+# with 0.18 / 48 h: precision 1.000, recall 0.632, false merges 0 (rate 0.000),
+# false splits 7 (rate 0.368), unassigned 0.
+# - 0.18 is the largest distance with zero false merges and a margin below the
+#   nearest different-event pair within the time gap: the templated Almen and
+#   Kestrel earthquake reports, 15 minutes apart, at 0.192. 0.19 also has
+#   zero merges but only a 0.002 margin; 0.20 merges the two earthquakes.
+# - 48 h separates the reelection announcement (61 h after the budget vote,
+#   distance 0.177) from the budget Story while keeping the two-day harbor
+#   follow-up (47 h after the Story's latest member). 72 h merges them.
+# Known trade-off: splits are preferred to merges. Reworded coverage above 0.18
+# starts its own Story (harbor-storm-03 at 0.199, varrow-budget-02 at 0.189,
+# the daily Almen flood reports at 0.21-0.24).
+NEWS_STORY_MATCH_MAX_DISTANCE = 0.18
+NEWS_STORY_MATCH_MAX_TIME_GAP_HOURS = 48
+
 # One RUNNING ingestion run younger than this is assumed to be in flight: the
 # poll dispatcher skips its endpoint (#19) and `news_runs --stale` does not
 # report it (#20). One fixed operational constant, shared so the two views can

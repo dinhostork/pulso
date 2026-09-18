@@ -121,4 +121,10 @@ assert report.false_merge_rate <= LIMIT, report.describe()
 ```
 
 Everything is offline: no HTTP, fixture server, embedding provider or model.
+
+`recorded_local_embeddings.json` is not part of the corpus and holds no ground
+truth. It stores the local embedding model's vectors for the corpus inputs, so
+Story matching tests can replay real embeddings offline
+(`tests/news/recorded_embeddings.py`). Re-record it whenever corpus text
+changes.
 The formulas and zero-denominator rules are documented in `story_metrics.py`.

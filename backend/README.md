@@ -507,6 +507,60 @@ have ordinary indexes: `StoryEmbedding.model_key`, `Story.status` and the
 StoryArticle membership index. Revisit a per-model approximate index only
 when Story volume makes the exact scan measurably slow.
 
+## Story matching
+
+`news.application.story_matching.match_article(article_id)` places one
+embedded Article in a Story (issue #28). It retrieves candidates (above),
+passes an immutable snapshot and the candidates to the pure rule
+`news.domain.story_matching.decide_story_match`, and persists the result in
+one transaction:
+
+- `MATCH`: one primary `StoryArticle` with `method=MATCHED`.
+- `CREATE_NEW_STORY`: one `ACTIVE` Story, its primary `StoryArticle`
+  (`method=CREATED_STORY`) and its first `StoryEmbedding`. One call creates at
+  most one Story.
+
+The rule is: the nearest compatible candidate (`ACTIVE`, same language,
+latest member within `NEWS_STORY_MATCH_MAX_TIME_GAP_HOURS`) is joined when its
+cosine distance is at most `NEWS_STORY_MATCH_MAX_DISTANCE`. The **ambiguous
+band** — nearest distance above the threshold but inside the retrieval bound —
+starts a new Story, because v0.3 prefers splitting one event over merging two.
+The decision never sees `content_fingerprint`, `duplicate_of` or Source
+identity.
+
+| Setting | Value |
+| --- | --- |
+| `NEWS_STORY_MATCH_MAX_DISTANCE` | `0.18` |
+| `NEWS_STORY_MATCH_MAX_TIME_GAP_HOURS` | `48` |
+
+Both values come from measurements on the #26 corpus, which are recorded next
+to them in `config/common.py`. Both are part of `MATCHER_KEY`
+(`story-match-v1;max_distance=0.18;max_time_gap_hours=48.0`), which each
+association stores, so a policy change is visible in the data.
+
+The measured result with the local model is precision 1.000, recall 0.632,
+0 false merges and 7 false-split pairs. The known trade-off is that reworded
+or day-by-day coverage just above the threshold starts its own Story.
+`tests/news/test_story_matching_corpus.py` enforces these numbers as bounds.
+The default suite replays the local model's recorded corpus vectors offline
+(`tests/news/recorded_embeddings.py`), because the hashing test double cannot
+express the corpus semantics. The opt-in `local_embedding` run checks the
+recording against the live model.
+
+Each association records `matcher_key`, the `similarity` (cosine similarity,
+`1 - distance`; NULL for `CREATED_STORY`) and an `evidence` object. The
+evidence holds only identifiers and numbers: the reason, the distance, the
+candidate count, the nearest five candidates, the thresholds and the embedding
+`model_key`.
+
+Replays return the existing primary association. Races are settled by
+PostgreSQL uniqueness and a re-read. A chosen Story found `ARCHIVED` under its
+row lock is re-decided once. Two same-event Articles matched at the same moment
+with no Story yet create two Stories; v0.3 accepts that and leaves convergence
+to later reprocessing. Refreshing a Story's embedding as members join, and
+archiving Stories left empty, belong to the Story refresh lifecycle, not to
+matching.
+
 ## Local Compose stack
 
 Prerequisites: Docker Engine with BuildKit and Docker Compose v2.20 or newer

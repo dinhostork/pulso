@@ -360,6 +360,8 @@ class StoryArticle(models.Model):
     is_primary = models.BooleanField(default=False)
     associated_at = models.DateTimeField(default=timezone.now)
     method = models.CharField(max_length=16, choices=Method.choices)
+    # Cosine similarity (1 - pgvector cosine distance) to the matched Story;
+    # NULL when the Article created the Story and nothing was compared (#28).
     similarity = models.FloatField(null=True, blank=True)
     matcher_key = models.CharField(max_length=128, blank=True)
     evidence = models.JSONField(default=dict, blank=True)
