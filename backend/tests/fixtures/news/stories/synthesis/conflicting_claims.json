@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "anchor": "2026-03-02T12:00:00+00:00",
+  "description": "Two Sources agree on the event and disagree on one figure. Synthesis-only fixture; not part of the matching corpus.",
+  "articles": [
+    {
+      "id": "depot-fire-01",
+      "source_slug": "varrow-herald",
+      "published_offset_minutes": 0,
+      "title": "Fire destroys Brightline bus depot in Varrow",
+      "body": "A fire destroyed the Brightline Transit bus depot in Varrow early on Tuesday. Officials said 12 people were injured in the fire. Firefighters from three stations fought the blaze for five hours. The cause of the fire is under investigation."
+    },
+    {
+      "id": "depot-fire-02",
+      "source_slug": "kestrel-post",
+      "published_offset_minutes": 45,
+      "title": "Varrow depot blaze leaves dozens of buses burned",
+      "body": "Dozens of Brightline buses burned when fire swept through the company's Varrow depot on Tuesday. Officials said 19 people were injured in the fire. Firefighters from three stations fought the blaze for five hours. Brightline said services would run on reduced routes this week."
+    }
+  ],
+  "expected": {
+    "rule": "omit",
+    "disputed_figures": ["12", "19"],
+    "title": "Fire destroys Brightline bus depot in Varrow",
+    "title_article_ids": ["depot-fire-01"],
+    "summary": [
+      {
+        "text": "A fire destroyed the Brightline Transit bus depot in Varrow early on Tuesday.",
+        "article_ids": ["depot-fire-01"]
+      },
+      {
+        "text": "Dozens of Brightline buses burned when fire swept through the company's Varrow depot on Tuesday.",
+        "article_ids": ["depot-fire-02"]
+      }
+    ],
+    "context": [
+      {
+        "text": "Firefighters from three stations fought the blaze for five hours.",
+        "article_ids": ["depot-fire-01", "depot-fire-02"]
+      },
+      {
+        "text": "The cause of the fire is under investigation.",
+        "article_ids": ["depot-fire-01"]
+      },
+      {
+        "text": "Brightline said services would run on reduced routes this week.",
+        "article_ids": ["depot-fire-02"]
+      }
+    ]
+  }
+}

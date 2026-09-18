@@ -1,7 +1,9 @@
-"""Pure Story values shared by candidate retrieval and matching; no Django or models."""
+"""Pure Story values shared by retrieval, matching and refresh; no Django or models."""
 
+import hashlib
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 # Mirrors `news.models.Story.Status` without importing the ORM.
 STORY_ACTIVE = "ACTIVE"
@@ -31,3 +33,21 @@ class StoryCandidate:
     last_article_published_at: datetime
     language: str
     status: str = STORY_ACTIVE
+
+
+def member_signature(members: Iterable[tuple[int, datetime]]) -> str:
+    """Deterministic identity of a Story's membership and its members' revisions.
+
+    `members` are (article_id, revision marker) pairs; the marker is
+    `Article.updated_at`, which News Core moves whenever a new revision of the
+    Article is applied. The pairs are sorted by article id, each rendered as
+    `<id>:<UTC ISO-8601 marker>` on its own line, and hashed with SHA-256, so
+    the signature is independent of input order and identical in every
+    process. Adding, removing or revising a member changes it.
+    """
+
+    lines = sorted(
+        (article_id, marker.astimezone(UTC).isoformat()) for article_id, marker in members
+    )
+    body = "\n".join(f"{article_id}:{marker}" for article_id, marker in lines)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()

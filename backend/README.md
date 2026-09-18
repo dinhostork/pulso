@@ -679,6 +679,51 @@ extractor's `model_key` and `generated_at`.
   `EnrichmentError` (`NO_MEMBERS`, `EXTRACTOR_FAILED`, `INVALID_OUTPUT`) and
   log one warning with identifiers only, never Article text.
 
+## Story synthesis
+
+`news.application.story_synthesis.synthesize_story(story_id)` gives a Story a
+title, summary and context built only from its member Articles (issue #31).
+It returns a `SynthesisSummary` (identifiers, `model_key`,
+`member_signature` and counts). Nothing dispatches it yet; the Story refresh
+lifecycle will decide when it runs.
+
+The output is **derived**: sources support the information, and synthesis
+organizes it (ADR-0004). It is also **impersonal**: `synthesize_story` takes
+no user, and its input and output types carry no user, account, session,
+interest, ranking, Opinion, Position or Perspective field. The same Story state
+reads the same for everyone (ADR-0008).
+
+- **Persistence** (three tables). `StorySynthesis` is a generation header
+  (`model_key`, `generated_at`, `is_current`, `member_signature`) with no text,
+  and at most one current generation per Story. `StorySynthesisElement` holds
+  each `TITLE`/`SUMMARY`/`CONTEXT` text with its `position`, and exactly one
+  `TITLE` per generation. `StorySynthesisElementSource` lists the member
+  Articles supporting each element, in order. "Which Articles support this
+  element?" is one query; "which Articles fed this generation?" is one join.
+- **`member_signature`** (`news.domain.stories.member_signature`) is the
+  SHA-256 of the sorted `article_id:updated_at` pairs of every current member.
+  `Article.updated_at` is the revision marker News Core moves when a new
+  revision is applied. The same signature and `model_key` reuse the current
+  generation without calling the synthesizer.
+- **Input bounds:** `NEWS_STORY_SYNTHESIS_MAX_ARTICLES` (20) members in
+  publication order, each with its title and at most
+  `NEWS_STORY_SYNTHESIS_MAX_CHARS_PER_ARTICLE` (4000) characters of body text.
+- **Default synthesizer:** `extractive:lead-sentences@1` is extractive,
+  offline and deterministic. It copies the earliest member title, each
+  member's first complete sentence (at most 3 summary elements) and further
+  sentences (at most 4 context elements). Every element cites each member
+  whose text contains it. It never writes new prose. Other synthesizers plug
+  into the `StorySynthesizer` protocol; any future external one must make
+  sending source text an explicit opt-in.
+- **Disagreement:** when members give different figures for the same point,
+  the extractive default **omits** the disputed sentences rather than choosing
+  a side. Detection covers figures written in digits.
+- **Replacement:** the result is computed and validated with no transaction
+  open: exactly one `TITLE`, at least one supporting member per element, and
+  no Article outside the Story. One transaction then demotes the previous
+  generation and writes the new one. A failure raises `SynthesisError` and logs
+  identifiers only, and the previous current synthesis stays in place.
+
 ## Local Compose stack
 
 Prerequisites: Docker Engine with BuildKit and Docker Compose v2.20 or newer

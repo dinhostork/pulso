@@ -612,3 +612,92 @@ class StoryEntity(models.Model):
             models.UniqueConstraint(fields=["story", "entity"], name="news_storyentity_unique"),
             *_enrichment_constraints("news_storyentity"),
         ]
+
+
+class StorySynthesis(models.Model):
+    """One generation of a Story's synthesis: a header without any text (#31).
+
+    The text lives on `StorySynthesisElement` and each element's supporting
+    Articles on `StorySynthesisElementSource`, so every piece of synthesis is
+    traceable to the publications that carry it (ADR-0004). This is derived
+    output, never a publication: there is no Source link, and superseded
+    generations stay with `is_current=False` for inspection only.
+    `member_signature` (`news.domain.stories.member_signature`) identifies the
+    membership the generation was computed from.
+    """
+
+    story = models.ForeignKey(Story, on_delete=models.CASCADE, related_name="syntheses")
+    model_key = models.CharField(max_length=MAX_MODEL_KEY_LENGTH)
+    generated_at = models.DateTimeField(default=timezone.now)
+    is_current = models.BooleanField(default=True)
+    member_signature = models.CharField(max_length=64)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["story"],
+                condition=Q(is_current=True),
+                name="news_synthesis_one_current_per_story",
+            ),
+            models.CheckConstraint(
+                condition=~Q(model_key=""), name="news_synthesis_model_key_nonempty"
+            ),
+            models.CheckConstraint(
+                condition=~Q(member_signature=""), name="news_synthesis_signature_nonempty"
+            ),
+        ]
+
+
+class StorySynthesisElement(models.Model):
+    """One TITLE, SUMMARY or CONTEXT text of a generation.
+
+    Read order is always (kind: TITLE, SUMMARY, CONTEXT; position) — never
+    insertion or primary-key order.
+    """
+
+    class Kind(models.TextChoices):
+        TITLE = "TITLE", "Title"
+        SUMMARY = "SUMMARY", "Summary"
+        CONTEXT = "CONTEXT", "Context"
+
+    # The unique (synthesis, kind, position) index leads with `synthesis`.
+    synthesis = models.ForeignKey(
+        StorySynthesis, on_delete=models.CASCADE, related_name="elements", db_index=False
+    )
+    kind = models.CharField(max_length=16, choices=Kind.choices)
+    position = models.PositiveSmallIntegerField()
+    text = models.TextField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["synthesis", "kind", "position"], name="news_synthesis_element_order"
+            ),
+            models.UniqueConstraint(
+                fields=["synthesis"],
+                condition=Q(kind="TITLE"),
+                name="news_synthesis_one_title",
+            ),
+            models.CheckConstraint(condition=~Q(text=""), name="news_synthesis_element_text"),
+        ]
+
+
+class StorySynthesisElementSource(models.Model):
+    """A member Article supporting one element, in deterministic order."""
+
+    # The unique (element, article) index leads with `element`.
+    element = models.ForeignKey(
+        StorySynthesisElement, on_delete=models.CASCADE, related_name="sources", db_index=False
+    )
+    article = models.ForeignKey(Article, on_delete=models.PROTECT, related_name="synthesis_sources")
+    position = models.PositiveSmallIntegerField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["element", "article"], name="news_synthesis_source_unique"
+            ),
+            models.UniqueConstraint(
+                fields=["element", "position"], name="news_synthesis_source_order"
+            ),
+        ]

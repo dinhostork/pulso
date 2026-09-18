@@ -221,6 +221,9 @@ def test_news_migrations_have_provenance_publication_and_story_derived_tables_on
         "news_entity",
         "news_storytopic",
         "news_storyentity",
+        "news_storysynthesis",
+        "news_storysynthesiselement",
+        "news_storysynthesiselementsource",
     }
     with connection.cursor() as cursor:
         cursor.execute("SELECT tablename FROM pg_tables WHERE schemaname = current_schema()")

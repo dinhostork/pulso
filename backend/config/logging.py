@@ -83,6 +83,9 @@ SAFE_FIELDS = (
     "topic_count",
     "entity_count",
     "model_key",
+    # Story synthesis (#31): counts only.
+    "input_article_count",
+    "element_count",
     # Retention.
     "deleted",
     "retention_days",

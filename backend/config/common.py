@@ -171,6 +171,12 @@ NEWS_STORY_ENRICHMENT_MAX_CHARS_PER_ARTICLE = 4000
 NEWS_STORY_MAX_TOPICS = 8
 NEWS_STORY_MAX_ENTITIES = 20
 
+# Story synthesis (#31): fixed bounds on the member input a synthesizer sees.
+# Members are read in publication order; each contributes its title and at
+# most MAX_CHARS characters of body (or description) text.
+NEWS_STORY_SYNTHESIS_MAX_ARTICLES = 20
+NEWS_STORY_SYNTHESIS_MAX_CHARS_PER_ARTICLE = 4000
+
 # One RUNNING ingestion run younger than this is assumed to be in flight: the
 # poll dispatcher skips its endpoint (#19) and `news_runs --stale` does not
 # report it (#20). One fixed operational constant, shared so the two views can

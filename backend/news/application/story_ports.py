@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
@@ -111,7 +112,7 @@ class EmbeddingProvider(Protocol):
 
 @dataclass(frozen=True)
 class ExtractorModel:
-    """Identity of a Topic/Entity extractor; stored on every row as `model_key`."""
+    """Identity of a Story extractor or synthesizer; stored on its rows as `model_key`."""
 
     provider: str
     model: str
@@ -183,6 +184,73 @@ class EnrichmentError(Exception):
     """Safe extraction failure: kind, bounded message, model key; never text."""
 
     def __init__(self, kind: EnrichmentErrorKind, message: str, *, model_key: str = ""):
+        self.kind = kind
+        self.message = " ".join(message.split())[:200]
+        self.model_key = model_key
+        super().__init__(self.message)
+
+
+# --- Story synthesis (#31) ------------------------------------------------------
+#
+# Deliberately impersonal: none of these values carries a user, account,
+# session, interest, ranking, Opinion, Position or Perspective field, so the
+# same Story state yields the same synthesis for every reader (ADR-0008).
+
+
+@dataclass(frozen=True)
+class SynthesisArticle:
+    """One member Article as a synthesizer sees it: bounded, normalized text."""
+
+    article_id: int
+    source_slug: str
+    title: str
+    published_at: datetime
+    text: str
+
+
+@dataclass(frozen=True)
+class SynthesisInput:
+    story_id: int
+    articles: tuple[SynthesisArticle, ...]
+
+
+ELEMENT_KINDS = ("TITLE", "SUMMARY", "CONTEXT")
+
+
+@dataclass(frozen=True)
+class SynthesisElement:
+    """One piece of synthesis text and the member Articles supporting it, in order."""
+
+    kind: str  # TITLE, SUMMARY or CONTEXT
+    text: str
+    article_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class SynthesisResult:
+    """An ordered sequence of elements; attribution travels with each element."""
+
+    elements: tuple[SynthesisElement, ...]
+
+
+@runtime_checkable
+class StorySynthesizer(Protocol):
+    @property
+    def identity(self) -> ExtractorModel: ...
+
+    def synthesize(self, story: SynthesisInput) -> SynthesisResult: ...
+
+
+class SynthesisErrorKind(StrEnum):
+    NO_MEMBERS = "NO_MEMBERS"
+    SYNTHESIZER_FAILED = "SYNTHESIZER_FAILED"
+    INVALID_OUTPUT = "INVALID_OUTPUT"
+
+
+class SynthesisError(Exception):
+    """Safe synthesis failure: kind, bounded message, model key; never text."""
+
+    def __init__(self, kind: SynthesisErrorKind, message: str, *, model_key: str = ""):
         self.kind = kind
         self.message = " ".join(message.split())[:200]
         self.model_key = model_key
