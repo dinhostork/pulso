@@ -28,6 +28,7 @@ current synthesis stays in place. When refresh runs is decided by the Story
 refresh lifecycle (#32).
 """
 
+import time
 from dataclasses import dataclass
 
 from django.conf import settings
@@ -47,7 +48,7 @@ from news.application.story_ports import (
     SynthesisResult,
 )
 from news.domain.stories import member_signature
-from news.logging import ingestion_logger
+from news.logging import ContextLoggerAdapter, log_step, story_logger
 from news.models import (
     Article,
     Story,
@@ -177,10 +178,31 @@ def _validated(result: object, members: set[int], model_key: str) -> tuple[Synth
     return elements
 
 
-def _fail(story_id: int, error: SynthesisError) -> SynthesisError:
-    ingestion_logger(SYNTHESIS_LOGGER).warning(
+def _fail(
+    story_id: int,
+    error: SynthesisError,
+    log: ContextLoggerAdapter | None = None,
+    started: float | None = None,
+) -> SynthesisError:
+    log = log or story_logger(SYNTHESIS_LOGGER)
+    if started is not None:
+        log_step(
+            log,
+            "story_synthesis",
+            started,
+            failed=True,
+            story_id=story_id,
+            error_kind=str(error.kind),
+            model_key=error.model_key,
+        )
+    log.warning(
         "News Story synthesis failed",
-        extra={"story_id": story_id, "error_kind": str(error.kind), "model_key": error.model_key},
+        extra={
+            "story_id": story_id,
+            "error_kind": str(error.kind),
+            "model_key": error.model_key,
+            "step": "story_synthesis",
+        },
     )
     return error
 
@@ -204,10 +226,19 @@ def _current(story_id: int, signature: str, model_key: str) -> StorySynthesis | 
 
 
 def compute_story_synthesis(
-    prepared: SynthesisInput, *, synthesizer: StorySynthesizer | None = None
+    prepared: SynthesisInput,
+    *,
+    synthesizer: StorySynthesizer | None = None,
+    logger: ContextLoggerAdapter | None = None,
 ) -> ComputedSynthesis:
-    """Run and validate the synthesizer without ORM access or writes."""
+    """Run and validate the synthesizer without ORM access or writes.
 
+    Emits one `story_synthesis` step record: element and cited-Article counts,
+    never text.
+    """
+
+    started = time.monotonic()
+    log = (logger or story_logger(SYNTHESIS_LOGGER)).bind(story_id=prepared.story_id)
     synthesizer = synthesizer or ExtractiveSynthesizer()
     model_key = synthesizer.identity.model_key
     try:
@@ -227,7 +258,16 @@ def compute_story_synthesis(
             result, {article.article_id for article in prepared.articles}, model_key
         )
     except SynthesisError as error:
-        raise _fail(prepared.story_id, error) from None
+        raise _fail(prepared.story_id, error, log, started) from None
+    log_step(
+        log,
+        "story_synthesis",
+        started,
+        model_key=model_key,
+        element_count=len(elements),
+        synthesis_source_count=len({pk for element in elements for pk in element.article_ids}),
+        input_article_count=len(prepared.articles),
+    )
     return ComputedSynthesis(model_key, elements, len(prepared.articles))
 
 
@@ -289,7 +329,7 @@ def synthesize_story(
             return _summary(existing, snapshot, created=False)
         synthesis = persist_story_synthesis(story_id, snapshot.signature, computed)
     summary = _summary(synthesis, snapshot, created=True)
-    ingestion_logger(SYNTHESIS_LOGGER).info(
+    story_logger(SYNTHESIS_LOGGER).info(
         "News Story synthesis completed",
         extra={
             "story_id": story_id,

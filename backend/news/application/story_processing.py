@@ -45,6 +45,7 @@ Separation from News Core
     archiving it belong to the Story refresh lifecycle (#32).
 """
 
+import time
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -56,8 +57,9 @@ from django.utils import timezone
 from news.application.embeddings import configured_provider, embed_article
 from news.application.story_candidates import MissingArticleEmbedding
 from news.application.story_matching import MATCHER_KEY, StoryNoLongerActive, match_article
-from news.application.story_ports import EmbeddingError
+from news.application.story_ports import EmbeddingError, EmbeddingErrorKind
 from news.application.story_refresh import mark_story_stale
+from news.logging import ContextLoggerAdapter, log_step, story_logger
 from news.models import Article, ArticleEmbedding, ArticleStoryProcessing, StoryArticle
 
 State = ArticleStoryProcessing.State
@@ -150,6 +152,12 @@ def _is_fresh(row: ArticleStoryProcessing, keys: PipelineKeys) -> bool:
     )
 
 
+def is_fresh(row: ArticleStoryProcessing) -> bool:
+    """The freshness rule above, for the configured pair (operator inspection)."""
+
+    return _is_fresh(row, current_keys())
+
+
 def _record_failure(article_id: int, keys: PipelineKeys, failure: _Failure) -> StepResult:
     with transaction.atomic():
         row = _row(article_id, keys)
@@ -176,11 +184,49 @@ def _guarded(article_id: int, keys: PipelineKeys, step) -> StepResult:
         return _record_failure(article_id, keys, failure)
 
 
-def embed_step(article_id: int) -> StepResult:
+def _step_logger(
+    logger: ContextLoggerAdapter | None, article_id: int, keys: PipelineKeys
+) -> ContextLoggerAdapter:
+    return (logger or story_logger()).bind(
+        article_id=article_id, model_key=keys.embedding_model_key
+    )
+
+
+def _logged(log: ContextLoggerAdapter, step_name: str, started: float, run) -> StepResult:
+    """Run one guarded step and emit its record, including an unexpected failure."""
+
+    try:
+        result = run()
+    except Exception as error:
+        log_step(
+            log,
+            step_name,
+            started,
+            failed=True,
+            state=State.FAILED,
+            error_kind="UNEXPECTED",
+            exception_class=type(error).__name__,
+        )
+        raise
+    failed = result.state == State.FAILED
+    fields = {
+        "state": str(result.state),
+        "attempts": result.attempts,
+        "error_kind": result.error_kind,
+    }
+    if result.story_id is not None:
+        fields["story_id"] = result.story_id
+    log_step(log, step_name, started, failed=failed, pipeline_key=result.pipeline_key, **fields)
+    return result
+
+
+def embed_step(article_id: int, *, logger: ContextLoggerAdapter | None = None) -> StepResult:
     """Store the Article's embedding for the configured model; idempotent."""
 
+    started = time.monotonic()
     keys = current_keys()
     Article.objects.only("pk").get(pk=article_id)
+    log = _step_logger(logger, article_id, keys)
 
     def run() -> StepResult:
         row = _row(article_id, keys)
@@ -200,10 +246,10 @@ def embed_step(article_id: int) -> StepResult:
                 row.save()
         return _result(row)
 
-    return _guarded(article_id, keys, run)
+    return _logged(log, "article_embedding", started, lambda: _guarded(article_id, keys, run))
 
 
-def match_step(article_id: int) -> StepResult:
+def match_step(article_id: int, *, logger: ContextLoggerAdapter | None = None) -> StepResult:
     """Assign the Article's primary Story under the configured pair; idempotent.
 
     An existing primary association made with another matcher policy or
@@ -212,8 +258,10 @@ def match_step(article_id: int) -> StepResult:
     executions for one Article serialize here and the later one is a no-op.
     """
 
+    started = time.monotonic()
     keys = current_keys()
     Article.objects.only("pk").get(pk=article_id)
+    log = _step_logger(logger, article_id, keys)
 
     def run() -> StepResult:
         row = _row(article_id, keys)
@@ -228,7 +276,7 @@ def match_step(article_id: int) -> StepResult:
             ):
                 current.delete()
                 mark_story_stale(current.story_id, reason="membership_removed")
-            outcome = match_article(article_id, model_key=keys.embedding_model_key)
+            outcome = match_article(article_id, model_key=keys.embedding_model_key, logger=log)
             row.state = State.MATCHED
             row.embedding_model_key = keys.embedding_model_key
             row.matcher_key = keys.matcher_key
@@ -238,19 +286,19 @@ def match_step(article_id: int) -> StepResult:
             row.save()
         return _result(row, story_id=outcome.story_id)
 
-    return _guarded(article_id, keys, run)
+    return _logged(log, "story_matching", started, lambda: _guarded(article_id, keys, run))
 
 
-def process_article(article_id: int) -> StepResult:
+def process_article(article_id: int, *, logger: ContextLoggerAdapter | None = None) -> StepResult:
     """Run both steps in this process (operator commands); stops at a failure."""
 
-    embedded = embed_step(article_id)
+    embedded = embed_step(article_id, logger=logger)
     if embedded.state == State.FAILED:
         return embedded
-    return match_step(article_id)
+    return match_step(article_id, logger=logger)
 
 
-def reprocess_article(article_id: int) -> StepResult:
+def reprocess_article(article_id: int, *, logger: ContextLoggerAdapter | None = None) -> StepResult:
     """Delete this Article's derived Story rows, then process it again.
 
     Only derived state is removed — its embeddings, its primary association and
@@ -269,7 +317,7 @@ def reprocess_article(article_id: int) -> StepResult:
             mark_story_stale(story_id, reason="membership_removed")
         ArticleEmbedding.objects.filter(article_id=article_id).delete()
         ArticleStoryProcessing.objects.filter(article_id=article_id).delete()
-    return process_article(article_id)
+    return process_article(article_id, logger=logger)
 
 
 def reconciliation_candidates(*, limit: int | None = None, now=None) -> list[int]:
@@ -286,13 +334,8 @@ def reconciliation_candidates(*, limit: int | None = None, now=None) -> list[int
     cutoff = (now or timezone.now()) - timedelta(
         seconds=settings.NEWS_STORY_RECONCILE_AFTER_SECONDS
     )
-    same_pair = Q(
-        story_processing__embedding_model_key=keys.embedding_model_key,
-        story_processing__matcher_key=keys.matcher_key,
-    )
-    has_primary = Exists(StoryArticle.objects.filter(article_id=OuterRef("pk"), is_primary=True))
     due = Q(story_processing__updated_at__lte=cutoff) & (
-        ~same_pair
+        ~_same_pair(keys)
         | Q(story_processing__state__in=[State.PENDING, State.EMBEDDED])
         | Q(
             story_processing__state=State.FAILED,
@@ -301,11 +344,139 @@ def reconciliation_candidates(*, limit: int | None = None, now=None) -> list[int
         | Q(story_processing__state=State.MATCHED, has_primary=False)
     )
     return list(
-        Article.objects.annotate(has_primary=has_primary)
+        Article.objects.annotate(has_primary=_has_primary())
         .filter(Q(story_processing__isnull=True) | due)
         .order_by("pk")
         .values_list("pk", flat=True)[:limit]
     )
+
+
+def _same_pair(keys: PipelineKeys) -> Q:
+    return Q(
+        story_processing__embedding_model_key=keys.embedding_model_key,
+        story_processing__matcher_key=keys.matcher_key,
+    )
+
+
+def _has_primary() -> Exists:
+    return Exists(StoryArticle.objects.filter(article_id=OuterRef("pk"), is_primary=True))
+
+
+#: Operator categories of an Article whose Story processing is not complete.
+MISSING = "MISSING"  # no processing row: never attempted
+UNASSIGNED = "UNASSIGNED"  # MATCHED, but the primary association is gone
+STALE = "STALE"  # MATCHED under a pipeline pair other than the configured one
+
+BACKLOG_VIEWS = ("all", "pending", "failed")
+
+
+@dataclass(frozen=True)
+class IncompleteArticle:
+    """One Article with incomplete Story processing; identifiers and states only."""
+
+    article_id: int
+    category: str
+    attempts: int
+    error_kind: str
+    pipeline_key: str
+    updated_at: object
+    embedded: bool
+
+    @property
+    def failed_step(self) -> str:
+        if self.category != State.FAILED:
+            return ""
+        return failed_step(self.error_kind, embedded=self.embedded)
+
+
+_MATCHING_KINDS = frozenset({"MISSING_EMBEDDING", "STORY_NO_LONGER_ACTIVE"})
+_EMBEDDING_KINDS = frozenset(EmbeddingErrorKind)
+
+
+def failed_step(error_kind: str, *, embedded: bool) -> str:
+    """Name the step a FAILED row failed at, from its kind and what it left behind.
+
+    Embedding-provider kinds only arise while embedding, and the matching kinds
+    only while matching. `DATABASE_UNAVAILABLE` and `UNEXPECTED` can arise in
+    either: `embed_step` fails before an embedding exists and `match_step`
+    needs one, so an embedding stored for the recorded model places them at
+    matching.
+    """
+
+    if error_kind in _EMBEDDING_KINDS:
+        return "article_embedding"
+    if error_kind in _MATCHING_KINDS:
+        return "story_matching"
+    return "story_matching" if embedded else "article_embedding"
+
+
+def incomplete_articles(*, view: str = "all", limit: int) -> list[IncompleteArticle]:
+    """Articles whose Story processing is not complete, in article-id order.
+
+    Unlike `reconciliation_candidates` there is no cutoff and no attempt cap:
+    this is what an operator sees, not what a sweep re-dispatches. `pending`
+    is everything not FAILED; `failed` only FAILED rows. `embedded` says
+    whether the Article's embedding exists for its recorded model, which
+    places a failure before or after the embedding step.
+    """
+
+    if view not in BACKLOG_VIEWS:
+        raise ValueError(f"view must be one of {BACKLOG_VIEWS}")
+    if limit < 1:
+        raise ValueError("limit must be positive")
+    keys = current_keys()
+    missing = Q(story_processing__isnull=True)
+    failed = Q(story_processing__state=State.FAILED)
+    unfinished = (
+        missing
+        | Q(story_processing__state__in=[State.PENDING, State.EMBEDDED])
+        | Q(story_processing__state=State.MATCHED) & (~_same_pair(keys) | Q(has_primary=False))
+    )
+    condition = {"all": unfinished | failed, "pending": unfinished, "failed": failed}[view]
+    embedded = Exists(
+        ArticleEmbedding.objects.filter(
+            article_id=OuterRef("pk"), model_key=OuterRef("story_processing__embedding_model_key")
+        )
+    )
+    rows = (
+        Article.objects.annotate(has_primary=_has_primary(), embedded=embedded)
+        .filter(condition)
+        .order_by("pk")
+        .values_list(
+            "pk",
+            "story_processing__state",
+            "story_processing__attempts",
+            "story_processing__error_kind",
+            "story_processing__embedding_model_key",
+            "story_processing__matcher_key",
+            "story_processing__updated_at",
+            "has_primary",
+            "embedded",
+        )[:limit]
+    )
+    result = []
+    for article_id, state, attempts, error_kind, model, matcher, updated, primary, emb in rows:
+        pair = PipelineKeys(model or "", matcher or "")
+        if state is None:
+            category = MISSING
+        elif state == State.MATCHED and not primary:
+            category = UNASSIGNED
+        elif state == State.MATCHED:
+            category = STALE
+        else:
+            category = state
+        result.append(
+            IncompleteArticle(
+                article_id=article_id,
+                category=category,
+                attempts=attempts or 0,
+                error_kind=error_kind or "",
+                pipeline_key=pair.pipeline_key if state is not None else "-",
+                updated_at=updated,
+                embedded=bool(emb),
+            )
+        )
+    return result
 
 
 def claim_for_reconciliation(article_ids: list[int]) -> None:

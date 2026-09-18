@@ -1,5 +1,12 @@
-"""Refresh one coherent Story generation with snapshot, compute and CAS (#32)."""
+"""Refresh one coherent Story generation with snapshot, compute and CAS (#32).
 
+Each refresh emits one `story_refresh` record with its outcome (#33), plus one
+record per computed component. A failure is kept on the Story as
+`refresh_error = "<step>:<error kind>"`, where step is one of
+`FAILURE_STEPS`, so an operator can tell which component failed without logs.
+"""
+
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -26,7 +33,11 @@ from news.application.story_synthesis import (
     synthesis_input_from_members,
 )
 from news.domain.stories import member_signature
+from news.logging import ContextLoggerAdapter, log_step, story_logger
 from news.models import Article, Story, StoryEmbedding, StorySynthesis
+
+#: Where a refresh can fail; recorded as the prefix of `Story.refresh_error`.
+FAILURE_STEPS = ("story_embedding", "story_enrichment", "story_synthesis", "refresh_promotion")
 
 
 @dataclass(frozen=True)
@@ -79,6 +90,7 @@ class RefreshResult:
     reason: str
     retryable: bool = False
     error_kind: str = ""
+    failed_step: str = ""
 
 
 def _pairs(story_id: int):
@@ -175,7 +187,9 @@ def _changed(snapshot: StoryRefreshSnapshot, story: Story, reason: str) -> Refre
     return _result(snapshot, RefreshOutcome.STALE_RETRY, reason)
 
 
-def _failure(snapshot: StoryRefreshSnapshot, error: Exception, reason: str) -> RefreshResult:
+def _failure(
+    snapshot: StoryRefreshSnapshot, error: Exception, reason: str, step: str
+) -> RefreshResult:
     retryable = isinstance(error, OperationalError) or bool(getattr(error, "retryable", False))
     kind = str(getattr(error, "kind", type(error).__name__))[:32]
     with transaction.atomic():
@@ -190,9 +204,45 @@ def _failure(snapshot: StoryRefreshSnapshot, error: Exception, reason: str) -> R
         ):
             return _result(snapshot, RefreshOutcome.NOOP, reason)
         story.refresh_state = Story.RefreshState.FAILED
-        story.refresh_error = kind[:512]
+        story.refresh_error = f"{step}:{kind}"[:512]
         story.save(update_fields=["refresh_state", "refresh_error", "updated_at"])
-    return _result(snapshot, RefreshOutcome.FAILED, reason, retryable=retryable, error_kind=kind)
+    return _result(
+        snapshot,
+        RefreshOutcome.FAILED,
+        reason,
+        retryable=retryable,
+        error_kind=kind,
+        failed_step=step,
+    )
+
+
+_REFRESH_STATE = {
+    RefreshOutcome.REFRESHED: Story.RefreshState.CURRENT,
+    RefreshOutcome.ARCHIVED: Story.RefreshState.CURRENT,
+    RefreshOutcome.STALE_RETRY: Story.RefreshState.STALE,
+    RefreshOutcome.FAILED: Story.RefreshState.FAILED,
+}
+
+
+def _log_refresh(log: ContextLoggerAdapter, result: RefreshResult, started: float) -> None:
+    """One record per refresh, from the application outcome only."""
+
+    fields = {
+        "outcome": str(result.outcome),
+        "refresh_reason": result.reason,
+        "member_count": result.article_count,
+        "article_count": result.article_count,
+        "source_count": result.source_count,
+    }
+    state = _REFRESH_STATE.get(result.outcome)
+    if state is not None:
+        # NOOP changes nothing, so it states no refresh_state of its own.
+        fields["refresh_state"] = str(state)
+    if result.outcome == RefreshOutcome.FAILED:
+        fields.update(error_kind=result.error_kind, failed_step=result.failed_step)
+    log_step(
+        log, "story_refresh", started, failed=result.outcome == RefreshOutcome.FAILED, **fields
+    )
 
 
 def refresh_story(
@@ -203,9 +253,35 @@ def refresh_story(
     topic_extractor=None,
     entity_extractor=None,
     synthesizer=None,
+    logger: ContextLoggerAdapter | None = None,
 ) -> RefreshResult:
     """Compute without writes or locks; promote one complete generation under CAS."""
 
+    started = time.monotonic()
+    log = (logger or story_logger()).bind(story_id=story_id)
+    result = _refresh(
+        story_id,
+        reason=reason,
+        provider=provider,
+        topic_extractor=topic_extractor,
+        entity_extractor=entity_extractor,
+        synthesizer=synthesizer,
+        log=log,
+    )
+    _log_refresh(log, result, started)
+    return result
+
+
+def _refresh(
+    story_id: int,
+    *,
+    reason: str,
+    provider,
+    topic_extractor,
+    entity_extractor,
+    synthesizer,
+    log: ContextLoggerAdapter,
+) -> RefreshResult:
     snapshot = snapshot_story(story_id)
     if snapshot.current and (
         not snapshot.members
@@ -218,20 +294,46 @@ def refresh_story(
 
     computed = None
     if snapshot.members:
+        step = "story_embedding"
         try:
-            embedding = compute_story_embedding(snapshot.members, provider or configured_provider())
+            provider = provider or configured_provider()
+            step_started = time.monotonic()
+            try:
+                embedding = compute_story_embedding(snapshot.members, provider)
+            except Exception as error:
+                log_step(
+                    log,
+                    step,
+                    step_started,
+                    failed=True,
+                    model_key=provider.identity.model_key,
+                    error_kind=str(getattr(error, "kind", type(error).__name__))[:32],
+                )
+                raise
+            log_step(
+                log,
+                step,
+                step_started,
+                model_key=embedding.model_key,
+                member_count=embedding.member_count,
+            )
+            # Enrichment and synthesis emit their own step records.
+            step = "story_enrichment"
             enrichment = compute_story_enrichment(
                 story_text_from_members(story_id, snapshot.members),
                 topic_extractor=topic_extractor,
                 entity_extractor=entity_extractor,
+                logger=log,
             )
+            step = "story_synthesis"
             synthesis = compute_story_synthesis(
                 synthesis_input_from_members(story_id, snapshot.members),
                 synthesizer=synthesizer,
+                logger=log,
             )
             computed = ComputedStoryRefresh(snapshot.signature, embedding, enrichment, synthesis)
         except Exception as error:
-            return _failure(snapshot, error, reason)
+            return _failure(snapshot, error, reason, step)
 
     try:
         with transaction.atomic():
@@ -276,7 +378,7 @@ def refresh_story(
             story.refresh_error = ""
             story.save()
     except Exception as error:
-        return _failure(snapshot, error, reason)
+        return _failure(snapshot, error, reason, "refresh_promotion")
     return _result(
         snapshot, RefreshOutcome.ARCHIVED if computed is None else RefreshOutcome.REFRESHED, reason
     )

@@ -17,8 +17,9 @@ from datetime import UTC, datetime
 
 #: Operational identifiers, statuses and counts that may be emitted. Content
 #: fields (title, description, body_text, summary_html, content_html, payload,
-#: adapter_config, headers, credentials) are deliberately absent and must never
-#: be added.
+#: adapter_config, headers, credentials) and Story-derived content (synthesis
+#: text, prompts, provider responses, vectors) are deliberately absent and must
+#: never be added.
 SAFE_FIELDS = (
     # Stable ingestion context (news/logging.py).
     "source_id",
@@ -86,6 +87,24 @@ SAFE_FIELDS = (
     # Story synthesis (#31): counts only.
     "input_article_count",
     "element_count",
+    # Story observability (#33): step names, decisions, numbers and states.
+    # `story_id`, `model_key`, `topic_count`, `entity_count`, `error_kind`,
+    # `duration_ms`, `outcome` and `state` are already listed above.
+    "step",
+    "failed_step",
+    "candidate_count",
+    "chosen_story_id",
+    "distance",
+    "threshold",
+    "decision",
+    "match_reason",
+    "matcher_key",
+    "member_count",
+    "article_count",
+    "source_count",
+    "synthesis_source_count",
+    "refresh_state",
+    "refresh_reason",
     # Retention.
     "deleted",
     "retention_days",

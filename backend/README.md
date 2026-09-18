@@ -284,7 +284,7 @@ subclass; no logging dependency). Base fields on every record:
 | --- | --- |
 | `timestamp` | UTC ISO-8601, from the record's creation time |
 | `level` | `DEBUG` … `CRITICAL` |
-| `logger` | e.g. `pulso.news.ingest`, `pulso.news.process`, `pulso.news.tasks`, `pulso.diagnostics` |
+| `logger` | e.g. `pulso.news.ingest`, `pulso.news.process`, `pulso.news.stories`, `pulso.news.tasks`, `pulso.diagnostics` |
 | `message` | the human-readable message, with `%`-parameters already applied |
 
 Beyond those, the formatter emits **only** the fields in its `SAFE_FIELDS`
@@ -296,6 +296,17 @@ are primitives (anything else is reduced to its type name) and bounded to 512
 characters. An exception contributes its class name only — never its arguments
 or traceback, which may carry transport data; Django and Celery keep their own
 loggers, levels and tracebacks untouched.
+
+Story processing (#33) adds identifiers, decisions, numbers and states only:
+the context fields `article_id`, `story_id`, `model_key`, `task_id`, `attempt`
+and `trigger`, and the per-step fields `step`, `failed_step`,
+`candidate_count`, `chosen_story_id`, `distance`, `threshold`, `decision`,
+`match_reason`, `matcher_key`, `duration_ms`, `member_count`,
+`article_count`, `source_count`, `topic_count`, `entity_count`,
+`synthesis_source_count`, `refresh_state`, `refresh_reason` and `error_kind`.
+Their meaning per step is in [Story observability](#story-observability).
+Titles, descriptions, bodies, payloads, synthesis text, prompts, provider
+responses and vectors are never allowlisted.
 
 `LOG_LEVEL` (default `INFO`, one of `DEBUG`, `INFO`, `WARNING`, `ERROR`,
 `CRITICAL`) sets the level of the `pulso` tree; an unrecognized value is an
@@ -732,7 +743,10 @@ generation. `Story.refresh_state` is `STALE` before the first refresh and after
 membership or member Article revision changes, `CURRENT` after coherent
 promotion, and `FAILED` when the current membership cannot be refreshed.
 `refreshed_at` is null until the first success. The bounded `refresh_error`
-holds an error kind, never publication text or provider output.
+holds `<step>:<error kind>` (for example `story_synthesis:INVALID_OUTPUT`),
+never publication text or provider output; the step is one of
+`story_embedding`, `story_enrichment`, `story_synthesis` or
+`refresh_promotion`. Rows failed before #33 hold the kind alone.
 
 The generation key is the existing SHA-256 `member_signature` over **all**
 sorted member `article_id:Article.updated_at` pairs. A short, read-only
@@ -787,6 +801,125 @@ uv run --locked --env-file .env python manage.py news_story_refresh --stale-fail
 ```
 
 The sweep selects Story ids in ascending order and bounds `--limit` to 1–1000.
+
+## Story observability
+
+Story processing is explainable from the structured logs and four read-only
+commands (issue #33). There is no metrics platform and no HTTP operator API.
+Explanations come from what was **recorded at decision time** —
+`StoryArticle.evidence`, `ArticleStoryProcessing` and the Story's refresh
+columns — never from running retrieval again, which could answer differently
+once other Stories exist.
+
+### Story log context and step records
+
+`news/logging.py::story_logger(**context)` is the ingestion adapter with the
+Story context. Only the fields known at a step are bound:
+
+| Field | Bound by |
+| --- | --- |
+| `article_id` | every Article step: embedding, retrieval, decision, association |
+| `story_id` | every refresh step; association records name the Story they joined |
+| `model_key` | the embedding model for Article steps; each component's own key in refresh |
+| `task_id`, `attempt`, `trigger` | Celery tasks (`TASK`, or `RETRY` on a retry); absent on synchronous operator calls |
+
+Each meaningful step emits **one** record, `News Story step completed` (INFO) or
+`News Story step failed` (WARNING), with a stable `step` and a monotonic
+`duration_ms`:
+
+| `step` | Where | Fields |
+| --- | --- | --- |
+| `article_embedding` | `story_processing.embed_step` | `state`, `attempts`, `error_kind`, `pipeline_key` |
+| `candidate_retrieval` | `story_matching.match_article` | `candidate_count` |
+| `matching_decision` | `story_matching.match_article` | `decision` (`MATCH`/`CREATE_NEW_STORY`), `match_reason`, `chosen_story_id`, `distance`, `threshold`, `candidate_count` |
+| `story_association` | `story_matching.match_article` | `outcome` (`MATCHED`, `CREATED_STORY`, `ALREADY_ASSIGNED`), `story_id`, `matcher_key` |
+| `story_matching` | `story_processing.match_step` | `state`, `attempts`, `error_kind`, `story_id` |
+| `story_embedding` | `story_refresh.refresh_story` | `model_key`, `member_count` |
+| `topic_extraction` | `story_enrichment.compute_story_enrichment` | `model_key`, `topic_count` |
+| `entity_extraction` | `story_enrichment.compute_story_enrichment` | `model_key`, `entity_count` |
+| `story_synthesis` | `story_synthesis.compute_story_synthesis` | `model_key`, `element_count`, `synthesis_source_count`, `input_article_count` |
+| `story_refresh` | `story_refresh.refresh_story` | `outcome` (`REFRESHED`, `NOOP`, `STALE_RETRY`, `ARCHIVED`, `FAILED`), `refresh_state`, `refresh_reason`, `member_count`, `article_count`, `source_count`, `failed_step`, `error_kind` |
+
+A replayed match that finds the Article already assigned logs only its
+`story_association` with `ALREADY_ASSIGNED`: no decision was made, so none is
+logged. A `NOOP` refresh carries no `refresh_state`, because it changed none.
+Failed enrichment and synthesis keep their existing `News Story enrichment
+failed` / `News Story synthesis failed` warnings, now with `step`.
+
+The JSON allowlist gained `step`, `failed_step`, `candidate_count`,
+`chosen_story_id`, `distance`, `threshold`, `decision`, `match_reason`,
+`matcher_key`, `member_count`, `article_count`, `source_count`,
+`synthesis_source_count`, `refresh_state` and `refresh_reason`
+(`story_id`, `model_key`, `topic_count`, `entity_count`, `error_kind`,
+`duration_ms`, `state` and `outcome` already existed). Titles, descriptions,
+bodies, payloads, synthesis text, prompts, provider responses and vectors are
+not allowlisted: an attempt to log one is dropped whole, not truncated.
+
+### Operator commands
+
+```bash
+# Recent Stories, newest first: counters, refresh state, failed step, synthesis model_key
+uv run --locked --env-file .env python manage.py news_stories --last 20
+uv run --locked --env-file .env python manage.py news_stories --stale
+uv run --locked --env-file .env python manage.py news_stories --failed        # exit 1 if any
+uv run --locked --env-file .env python manage.py news_stories --failed --refresh
+
+# One Story: lifecycle, counters, members, Topics, Entities, synthesis provenance
+uv run --locked --env-file .env python manage.py news_story --story 123
+uv run --locked --env-file .env python manage.py news_story --story 123 --members 500
+uv run --locked --env-file .env python manage.py news_story --story 123 --refresh
+
+# Why did Article 42 join or create its Story?
+uv run --locked --env-file .env python manage.py news_story_explain --article 42
+uv run --locked --env-file .env python manage.py news_story_explain --article 42 --reprocess
+
+# Articles whose Story processing is not complete
+uv run --locked --env-file .env python manage.py news_story_backlog               # exit 1 on failures
+uv run --locked --env-file .env python manage.py news_story_backlog --failed --limit 100
+uv run --locked --env-file .env python manage.py news_story_backlog --pending --limit 50 --process
+```
+
+| Question | Command | What answers it |
+| --- | --- | --- |
+| Which Stories are stale or failed? | `news_stories --stale` / `--failed` | `REFRESH`, `FAILED_STEP`, `ERROR` columns |
+| Why did Article X join Story Y? | `news_story_explain --article X` | `decision=MATCH`, `chosen_story_id`, the deciding `distance`, the `threshold` in force, `candidate_count` and the recorded candidates |
+| Why did Article X create a new Story? | `news_story_explain --article X` | `decision=CREATE_NEW_STORY` with `reason` `NO_CANDIDATES`, `NO_COMPATIBLE_CANDIDATE` or `ABOVE_THRESHOLD`, plus each recorded candidate's distance |
+| Which Articles support Story Y? | `news_story --story Y` | every member (id, Source, canonical URL, title, publication time, method, recorded distance) with `CITED`, and each synthesis element's supporting Article ids |
+| Which Story-derived step failed? | `news_story --story Y`, `news_story_explain --article X`, `news_story_backlog --failed` | `failed_step` and `error_kind` |
+| How do I reprocess one Article? | `news_story_explain --article X --reprocess` (or `news_story_process --article X --reprocess`) | `reprocess_article` (#29) |
+| How do I refresh one Story? | `news_story --story Y --refresh` (or `news_story_refresh --story Y`) | `refresh_story` (#32) |
+
+**Explanations.** The recorded evidence holds the matcher's `reason`, the
+deciding `distance`, `candidate_count`, at most five candidates with their
+distances, the `max_distance` and `max_time_gap_hours` in force and the
+embedding `model_key`. `candidate_count` counts every candidate retrieved;
+only the nearest five are recorded. `fresh=yes` means the Article is matched
+under the configured `pipeline_key` and still has its primary association.
+
+**Failed step.** A Story's `refresh_error` records its step. An Article's is
+read from what the failure left: embedding-provider kinds fail at
+`article_embedding`; `MISSING_EMBEDDING` and `STORY_NO_LONGER_ACTIVE` at
+`story_matching`; `DATABASE_UNAVAILABLE` and `UNEXPECTED` at
+`story_matching` when the Article's embedding exists for the recorded model,
+otherwise at `article_embedding`. `retries_exhausted=yes` means reconciliation
+has stopped re-dispatching it (`NEWS_STORY_PROCESSING_MAX_ATTEMPTS`).
+
+**Backlog.** `news_story_backlog` never conflates states: `MISSING` (no
+processing row: never attempted), `PENDING`, `EMBEDDED`, `FAILED`,
+`UNASSIGNED` (`MATCHED` but its primary association is gone) and `STALE`
+(`MATCHED` under another `pipeline_key`). `--pending` is everything not
+`FAILED`; `--failed` only `FAILED`. Unlike reconciliation it applies no cutoff
+and no attempt cap. It exits **1** when the listing contains a failure, like
+`news_runs --stale`.
+
+**Bounds and actions.** Every listing is ordered in SQL and bounded to
+1–1000 (`--last` default 20, `--members` default 100, `--limit` default 50).
+Inspection is read-only unless an action flag is given: `--reprocess` calls
+`reprocess_article`, `--refresh` calls `refresh_story(reason="operator")` and
+`--process` calls `process_article` for each listed Article. Commands contain
+no matching, retrieval or enrichment rule; a test inspects their source.
+Output shows identifiers, states, keys, canonical URLs and titles — never
+body text, descriptions, payloads or synthesis text.
 
 ## Local Compose stack
 

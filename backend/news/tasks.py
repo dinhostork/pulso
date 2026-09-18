@@ -41,7 +41,7 @@ from news.application.story_processing import (
 )
 from news.application.story_refresh import RefreshOutcome
 from news.application.story_refresh import refresh_story as refresh_story_app
-from news.logging import ingestion_logger
+from news.logging import ingestion_logger, story_logger, task_context
 from news.models import (
     Article,
     ArticleStoryProcessing,
@@ -327,13 +327,19 @@ def _step_payload(result: StepResult) -> dict:
     }
 
 
+# A Story task does not know what queued it (News Core, reconciliation or an
+# operator's --async); its trigger is `TASK`, or `RETRY` on a retry.
+TRIGGER_TASK = "TASK"
+
+
 def _run_story_step(task, step, article_id: int, message: str) -> dict:
     """Run one step and translate its verdict into Celery scheduling."""
 
     attempt = task.request.retries
-    logger = ingestion_logger(TASK_LOGGER, task_id=task.request.id or "", attempt=attempt)
+    context = task_context(task.request, trigger=TRIGGER_TASK)
+    logger = story_logger(TASK_LOGGER, **context)
     try:
-        result = step(article_id)
+        result = step(article_id, logger=story_logger(**context))
     except Article.DoesNotExist:
         logger.warning(message + " skipped", extra={"article_id": article_id, "state": "MISSING"})
         return {"article_id": article_id, "state": "MISSING"}
@@ -414,7 +420,11 @@ def refresh_story_task(self, story_id: int, *, reason: str = "membership_changed
     """Refresh one Story; retry only typed transient failures with bounded backoff."""
 
     try:
-        result = refresh_story_app(story_id, reason=reason)
+        result = refresh_story_app(
+            story_id,
+            reason=reason,
+            logger=story_logger(**task_context(self.request, trigger=TRIGGER_TASK)),
+        )
     except Story.DoesNotExist:
         return {"story_id": story_id, "outcome": "MISSING"}
     except OperationalError as error:
@@ -426,6 +436,7 @@ def refresh_story_task(self, story_id: int, *, reason: str = "membership_changed
         "article_count": result.article_count,
         "source_count": result.source_count,
         "error_kind": result.error_kind,
+        "failed_step": result.failed_step,
     }
     if (
         result.outcome == RefreshOutcome.FAILED

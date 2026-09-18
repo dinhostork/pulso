@@ -5,7 +5,7 @@ The leading underscore keeps this module out of Django's command discovery.
 
 from django.core.management.base import CommandError
 
-from news.models import Article, Source, SourceEndpoint
+from news.models import Article, Source, SourceEndpoint, Story
 
 
 def resolve_source(identifier: str) -> Source:
@@ -52,6 +52,40 @@ def resolve_article(identifier) -> int:
     if not Article.objects.filter(pk=article_id).exists():
         raise CommandError(f"No Article with id {article_id}")
     return article_id
+
+
+def resolve_story(identifier) -> int:
+    """Resolve a Story by numeric id; returns the id."""
+
+    token = str(identifier or "").strip()
+    if not token.isdigit():
+        raise CommandError("A Story id is required")
+    story_id = int(token)
+    if not Story.objects.filter(pk=story_id).exists():
+        raise CommandError(f"No Story with id {story_id}")
+    return story_id
+
+
+def bounded_limit(value: int, flag: str, maximum: int = 1000) -> int:
+    """Reject a non-positive or oversized listing bound."""
+
+    if not 1 <= value <= maximum:
+        raise CommandError(f"{flag} must be between 1 and {maximum}")
+    return value
+
+
+def stamp(value) -> str:
+    return "-" if value is None else value.isoformat(timespec="seconds")
+
+
+def refresh_line(result) -> str:
+    """One line of a refresh outcome: identifiers, counts and kinds only."""
+
+    return (
+        f"story_id={result.story_id} outcome={result.outcome} "
+        f"article_count={result.article_count} source_count={result.source_count} "
+        f"failed_step={result.failed_step or '-'} error_kind={result.error_kind or '-'}"
+    )
 
 
 def story_step_line(result) -> str:

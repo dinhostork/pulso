@@ -23,6 +23,7 @@ later reprocessing. No lock outside PostgreSQL is used.
 is NULL for `CREATED_STORY`. The raw distance is kept in `evidence`.
 """
 
+import time
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -41,6 +42,7 @@ from news.domain.story_matching import (
     MatchPolicy,
     decide_story_match,
 )
+from news.logging import ContextLoggerAdapter, log_step, story_logger
 from news.models import Article, ArticleEmbedding, Story, StoryArticle, StoryEmbedding
 
 MATCH_POLICY = MatchPolicy(
@@ -161,29 +163,74 @@ def _apply(
     return MatchOutcome(snapshot.article_id, story.pk, association.pk, state, decision)
 
 
-def match_article(article_id: int, *, model_key: str | None = None) -> MatchOutcome:
+def _log_association(
+    log: ContextLoggerAdapter, outcome: MatchOutcome, started: float
+) -> MatchOutcome:
+    log_step(
+        log,
+        "story_association",
+        started,
+        outcome=str(outcome.state),
+        story_id=outcome.story_id,
+        matcher_key=MATCHER_KEY,
+    )
+    return outcome
+
+
+def _log_decision(log: ContextLoggerAdapter, decision: MatchDecision, started: float) -> None:
+    """The decision as the domain made it; no second taxonomy."""
+
+    log_step(
+        log,
+        "matching_decision",
+        started,
+        decision=str(decision.kind),
+        match_reason=str(decision.reason),
+        chosen_story_id=decision.story_id,
+        distance=decision.distance,
+        threshold=MATCH_POLICY.max_distance,
+        candidate_count=decision.candidate_count,
+    )
+
+
+def match_article(
+    article_id: int,
+    *,
+    model_key: str | None = None,
+    logger: ContextLoggerAdapter | None = None,
+) -> MatchOutcome:
     """Assign the Article to a Story once; replays return the existing assignment.
 
     Requires the Article's embedding for `model_key` (default: the configured
     provider's); a missing one raises `MissingArticleEmbedding` before any write.
+    Emits one record each for retrieval, decision and association; a replay
+    logs only the association it found, since no decision was made.
     """
 
+    started = time.monotonic()
+    log = (logger or story_logger()).bind(article_id=article_id)
     existing = _existing(article_id)
     if existing is not None:
-        return existing
+        return _log_association(log, existing, started)
     if model_key is None:
         model_key = configured_provider().identity.model_key
+    log = log.bind(model_key=model_key)
     snapshot = _snapshot(article_id)
     for attempt in range(2):
+        step_started = time.monotonic()
         candidates = find_candidates(article_id, model_key)
+        log_step(log, "candidate_retrieval", step_started, candidate_count=len(candidates))
+        step_started = time.monotonic()
         decision = decide_story_match(snapshot, candidates, MATCH_POLICY)
+        _log_decision(log, decision, step_started)
         try:
             with transaction.atomic():
-                return _apply(snapshot, model_key, decision, candidates)
+                outcome = _apply(snapshot, model_key, decision, candidates)
+            return _log_association(log, outcome, started)
         except IntegrityError:
             existing = _existing(article_id)
             if existing is not None:
-                return existing
+                return _log_association(log, existing, started)
             if attempt:
                 raise
         except StoryNoLongerActive:

@@ -414,9 +414,14 @@ def test_refresh_never_changes_news_provenance_columns():
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
-    "component", ["compute_story_embedding", "compute_story_enrichment", "compute_story_synthesis"]
+    ("component", "step"),
+    [
+        ("compute_story_embedding", "story_embedding"),
+        ("compute_story_enrichment", "story_enrichment"),
+        ("compute_story_synthesis", "story_synthesis"),
+    ],
 )
-def test_each_component_failure_keeps_previous_generation(monkeypatch, component):
+def test_each_component_failure_keeps_previous_generation(monkeypatch, component, step):
     story = Story.objects.create(language="en")
     associate(story, article(110))
     refresh_story(story.pk)
@@ -431,7 +436,9 @@ def test_each_component_failure_keeps_previous_generation(monkeypatch, component
     assert result.outcome == RefreshOutcome.FAILED
     story.refresh_from_db()
     assert story.refresh_state == Story.RefreshState.FAILED
-    assert story.refresh_error == "RuntimeError"
+    # The failing step is recorded with the kind (#33); the text never is.
+    assert story.refresh_error == f"{step}:RuntimeError"
+    assert (result.failed_step, result.error_kind) == (step, "RuntimeError")
     assert signatures(story) == (old_signature, *old_derived)
 
 

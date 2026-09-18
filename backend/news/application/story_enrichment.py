@@ -19,6 +19,7 @@ the service runs is decided by the Story refresh lifecycle (#32), not here.
 """
 
 import math
+import time
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
@@ -41,7 +42,7 @@ from news.application.story_ports import (
 )
 from news.domain.embeddings import article_embedding_input
 from news.domain.enrichment import normalize_name, slugify
-from news.logging import ingestion_logger
+from news.logging import ContextLoggerAdapter, log_step, story_logger
 from news.models import Article, Entity, Story, StoryEntity, StoryTopic, Topic
 
 ENRICHMENT_LOGGER = "pulso.news.stories"
@@ -180,10 +181,26 @@ def _checked_entities(entities, model_key: str) -> dict[tuple[str, str], tuple[s
     return by_key
 
 
-def _fail(story_id: int, error: EnrichmentError) -> EnrichmentError:
-    ingestion_logger(ENRICHMENT_LOGGER).warning(
+def _fail(
+    log: ContextLoggerAdapter, story_id: int, error: EnrichmentError, step: str, started: float
+) -> EnrichmentError:
+    log_step(
+        log,
+        step,
+        started,
+        failed=True,
+        story_id=story_id,
+        error_kind=str(error.kind),
+        model_key=error.model_key,
+    )
+    log.warning(
         "News Story enrichment failed",
-        extra={"story_id": story_id, "error_kind": str(error.kind), "model_key": error.model_key},
+        extra={
+            "story_id": story_id,
+            "error_kind": str(error.kind),
+            "model_key": error.model_key,
+            "step": step,
+        },
     )
     return error
 
@@ -193,24 +210,33 @@ def compute_story_enrichment(
     *,
     topic_extractor: TopicExtractor | None = None,
     entity_extractor: EntityExtractor | None = None,
+    logger: ContextLoggerAdapter | None = None,
 ) -> ComputedEnrichment:
-    """Validate extraction from prepared text without reading or writing the database."""
+    """Validate extraction from prepared text without reading or writing the database.
 
+    Emits one `topic_extraction` and one `entity_extraction` step record.
+    """
+
+    log = (logger or story_logger(ENRICHMENT_LOGGER)).bind(story_id=text.story_id)
     topic_extractor = topic_extractor or default_extractor()
     entity_extractor = entity_extractor or default_extractor()
     topic_key = topic_extractor.identity.model_key
     entity_key = entity_extractor.identity.model_key
+    step, started = "topic_extraction", time.monotonic()
     try:
         if not text.articles:
             raise EnrichmentError(
                 EnrichmentErrorKind.NO_MEMBERS, "Story has no member Articles.", model_key=topic_key
             )
         topics = _checked_topics(_call(topic_extractor.extract_topics, text, topic_key), topic_key)
+        log_step(log, step, started, model_key=topic_key, topic_count=len(topics))
+        step, started = "entity_extraction", time.monotonic()
         entities = _checked_entities(
             _call(entity_extractor.extract_entities, text, entity_key), entity_key
         )
+        log_step(log, step, started, model_key=entity_key, entity_count=len(entities))
     except EnrichmentError as error:
-        raise _fail(text.story_id, error) from None
+        raise _fail(log, text.story_id, error, step, started) from None
 
     return ComputedEnrichment(
         topic_key, entity_key, MappingProxyType(topics), MappingProxyType(entities)
@@ -265,7 +291,7 @@ def persist_story_enrichment(
         computed.topic_model_key,
         computed.entity_model_key,
     )
-    ingestion_logger(ENRICHMENT_LOGGER).info(
+    story_logger(ENRICHMENT_LOGGER).info(
         "News Story enrichment completed",
         extra={
             "story_id": story_id,
