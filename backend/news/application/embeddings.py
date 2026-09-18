@@ -76,6 +76,13 @@ def embed_texts(provider: EmbeddingProvider, texts: Sequence[str]) -> tuple[Vect
             returned = provider.embed(batch)
         except EmbeddingError:
             raise
+        except TimeoutError, ConnectionError:
+            raise EmbeddingError(
+                EmbeddingErrorKind.PROVIDER_UNAVAILABLE,
+                "Embedding provider is temporarily unavailable.",
+                model_key=identity.model_key,
+                retryable=True,
+            ) from None
         except Exception:
             # Third-party errors may carry inputs or payloads; keep none of it.
             raise EmbeddingError(

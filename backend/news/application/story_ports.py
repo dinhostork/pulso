@@ -15,17 +15,30 @@ class EmbeddingErrorKind(StrEnum):
     INVALID_MODEL = "INVALID_MODEL"
     INVALID_INPUT = "INVALID_INPUT"
     PROVIDER_FAILED = "PROVIDER_FAILED"
+    PROVIDER_UNAVAILABLE = "PROVIDER_UNAVAILABLE"
     INVALID_OUTPUT = "INVALID_OUTPUT"
     DIMENSION_MISMATCH = "DIMENSION_MISMATCH"
 
 
 class EmbeddingError(Exception):
-    """Safe embedding failure metadata: never input text or provider objects."""
+    """Safe embedding failure metadata: never input text or provider objects.
 
-    def __init__(self, kind: EmbeddingErrorKind, message: str, *, model_key: str = ""):
+    `retryable` is the provider's verdict, as with `FetchError`: only a
+    temporary condition (a timeout, an unreachable provider) is retryable.
+    """
+
+    def __init__(
+        self,
+        kind: EmbeddingErrorKind,
+        message: str,
+        *,
+        model_key: str = "",
+        retryable: bool = False,
+    ):
         self.kind = kind
         self.message = " ".join(message.split())[:200]
         self.model_key = model_key
+        self.retryable = retryable
         super().__init__(self.message)
 
 

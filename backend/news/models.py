@@ -479,3 +479,49 @@ class StoryEmbedding(models.Model):
             *_embedding_constraints("news_storyemb"),
         ]
         indexes = [models.Index(fields=["model_key"], name="news_storyemb_model_key_idx")]
+
+
+class ArticleStoryProcessing(models.Model):
+    """Derived Story-processing state of one Article (#29).
+
+    A sibling of `Article` rather than columns on it: the Article is
+    provenance, and whether it has found its Story yet is not part of that
+    fact. Deleting this row loses nothing that reprocessing cannot rebuild.
+
+    `embedding_model_key` and `matcher_key` name the pipeline the row is
+    processing or has processed. Freshness compares that pair with the
+    configured one (`pipeline_key` in `news.application.story_processing`),
+    and keeping the two halves separate shows an operator which one moved.
+    `attempts` counts failed executions for the recorded pair.
+    """
+
+    class State(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        EMBEDDED = "EMBEDDED", "Embedded"
+        MATCHED = "MATCHED", "Matched"
+        FAILED = "FAILED", "Failed"
+
+    article = models.OneToOneField(
+        Article, on_delete=models.PROTECT, related_name="story_processing"
+    )
+    state = models.CharField(max_length=16, choices=State.choices, default=State.PENDING)
+    attempts = models.PositiveIntegerField(default=0)
+    error_kind = models.CharField(max_length=32, blank=True)
+    error_message = models.CharField(max_length=512, blank=True)
+    embedding_model_key = models.CharField(max_length=MAX_MODEL_KEY_LENGTH, blank=True)
+    matcher_key = models.CharField(max_length=128, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["state", "embedding_model_key", "matcher_key"],
+                name="news_storyproc_reconcile_idx",
+            ),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=~Q(state="MATCHED") | (~Q(embedding_model_key="") & ~Q(matcher_key="")),
+                name="news_storyproc_matched_has_keys",
+            ),
+        ]

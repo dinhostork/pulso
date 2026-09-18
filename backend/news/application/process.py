@@ -199,6 +199,34 @@ def _inserts_article(kind: DecisionKind) -> bool:
     return kind in (DecisionKind.CREATE, DecisionKind.CONTENT_DUPLICATE)
 
 
+def _dispatch_story_processing(article_id: int) -> None:
+    # Imported here: news.tasks imports this module.
+    from news.tasks import embed_article_story
+
+    embed_article_story.delay(article_id)
+
+
+def _schedule_story_processing(article_id: int) -> None:
+    """Queue Story processing once this Article's transaction commits (#29).
+
+    A rolled-back transaction queues nothing. The callback is `robust`, so a
+    broker failure is logged by Django and never reaches the caller: Story
+    processing is derived work and cannot fail, roll back or alter the News
+    Core result. Gated by NEWS_STORY_PROCESSING_ENABLED; reconciliation covers
+    Articles committed while it was off.
+    """
+
+    if not settings.NEWS_STORY_PROCESSING_ENABLED:
+        return
+
+    # A named function rather than functools.partial: Django reports a failed
+    # robust callback by its __qualname__, which a partial does not have.
+    def dispatch_story_processing() -> None:
+        _dispatch_story_processing(article_id)
+
+    transaction.on_commit(dispatch_story_processing, robust=True)
+
+
 def _insert(
     raw: RawArticle, normalized: NormalizedArticle, source: Source, decision: Decision
 ) -> ProcessOutcome:
@@ -218,7 +246,9 @@ def _insert(
         if content_duplicate
         else RawArticle.Outcome.ARTICLE_CREATED
     )
-    return _finish(raw, article, outcome)
+    result = _finish(raw, article, outcome)
+    _schedule_story_processing(article.pk)
+    return result
 
 
 def _update(raw: RawArticle, normalized: NormalizedArticle, article: Article) -> ProcessOutcome:
@@ -228,7 +258,9 @@ def _update(raw: RawArticle, normalized: NormalizedArticle, article: Article) ->
     for field, value in values.items():
         setattr(article, field, value)
     article.save(update_fields=[*values, "updated_at"])
-    return _finish(raw, article, RawArticle.Outcome.ARTICLE_UPDATED)
+    result = _finish(raw, article, RawArticle.Outcome.ARTICLE_UPDATED)
+    _schedule_story_processing(article.pk)
+    return result
 
 
 def _reject_identity_conflict(

@@ -52,6 +52,10 @@ NEWS_INGESTION_ENABLED = boolean("NEWS_INGESTION_ENABLED", default=True)
 NEWS_POLL_DISPATCH_INTERVAL_SECONDS = positive_int(
     "NEWS_POLL_DISPATCH_INTERVAL_SECONDS", default=300
 )
+# Story processing (#29): off by default, like a development stack that has
+# not opted into semantic work. When on, committed Articles are dispatched to
+# the Story tasks and Beat runs the reconciliation sweep.
+NEWS_STORY_PROCESSING_ENABLED = boolean("NEWS_STORY_PROCESSING_ENABLED")
 
 CELERY_BEAT_SCHEDULE = {}
 if CELERY_DIAGNOSTIC_BEAT_ENABLED:
@@ -71,4 +75,9 @@ if NEWS_INGESTION_ENABLED:
     CELERY_BEAT_SCHEDULE["news-prune-runs"] = {
         "task": "news.tasks.prune_ingestion_runs",
         "schedule": 604800.0,
+    }
+if NEWS_STORY_PROCESSING_ENABLED:
+    CELERY_BEAT_SCHEDULE["news-story-reconcile"] = {
+        "task": "news.tasks.reconcile_article_stories",
+        "schedule": float(NEWS_STORY_RECONCILE_INTERVAL_SECONDS),  # noqa: F405
     }

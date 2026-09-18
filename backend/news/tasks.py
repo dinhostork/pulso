@@ -1,4 +1,4 @@
-"""Celery adapters for News ingestion (ADR-0001, ADR-0005).
+"""Celery adapters for News ingestion and Story processing (ADR-0001, ADR-0005).
 
 Every task here is a thin orchestration adapter: it resolves identifiers,
 invokes one application function and translates the operational metadata that
@@ -32,8 +32,15 @@ from news.application.operations import prune_ingestion_runs as prune_ingestion_
 from news.application.ports import FetchErrorKind
 from news.application.process import ProcessOutcome
 from news.application.process import process_raw_article as process_raw_article_app
+from news.application.story_processing import (
+    StepResult,
+    claim_for_reconciliation,
+    embed_step,
+    match_step,
+    reconciliation_candidates,
+)
 from news.logging import ingestion_logger
-from news.models import IngestionRun, RawArticle, SourceEndpoint
+from news.models import Article, ArticleStoryProcessing, IngestionRun, RawArticle, SourceEndpoint
 
 TASK_LOGGER = "pulso.news.tasks"
 
@@ -281,3 +288,113 @@ def reconcile_pending_raw_articles() -> dict:
         extra={"dispatched": len(raw_ids), "limit": PENDING_RECONCILE_LIMIT},
     )
     return {"dispatched": len(raw_ids)}
+
+
+# --- Story processing (#29) --------------------------------------------------
+#
+# The same layering as ingestion: `news.application.story_processing` embeds,
+# matches, records state and classifies each failure as retryable or not; these
+# tasks only schedule the retries it allows. Arguments are Article ids — never
+# models, text or vectors. Redelivery is safe because both steps are idempotent.
+
+# Embedding may run a local model on the CPU; matching is one retrieval query
+# plus a short transaction.
+STORY_EMBED_SOFT_TIME_LIMIT_SECONDS = 120
+STORY_EMBED_TIME_LIMIT_SECONDS = 150
+STORY_MATCH_SOFT_TIME_LIMIT_SECONDS = 30
+STORY_MATCH_TIME_LIMIT_SECONDS = 60
+STORY_RECONCILE_SOFT_TIME_LIMIT_SECONDS = 60
+STORY_RECONCILE_TIME_LIMIT_SECONDS = 90
+
+
+def _step_payload(result: StepResult) -> dict:
+    return {
+        "article_id": result.article_id,
+        "state": str(result.state),
+        "pipeline_key": result.pipeline_key,
+        "attempts": result.attempts,
+        "error_kind": result.error_kind,
+        "story_id": result.story_id,
+    }
+
+
+def _run_story_step(task, step, article_id: int, message: str) -> dict:
+    """Run one step and translate its verdict into Celery scheduling."""
+
+    attempt = task.request.retries
+    logger = ingestion_logger(TASK_LOGGER, task_id=task.request.id or "", attempt=attempt)
+    try:
+        result = step(article_id)
+    except Article.DoesNotExist:
+        logger.warning(message + " skipped", extra={"article_id": article_id, "state": "MISSING"})
+        return {"article_id": article_id, "state": "MISSING"}
+    except OperationalError as error:
+        # The failure could not even be recorded; retry like raw processing.
+        raise task.retry(countdown=_backoff_seconds(attempt), exc=error) from error
+    payload = _step_payload(result)
+    if result.state == ArticleStoryProcessing.State.FAILED:
+        will_retry = result.retryable and attempt < task.max_retries
+        logger.warning(
+            message + " failed",
+            extra={
+                **payload,
+                "will_retry": will_retry,
+                "countdown": _backoff_seconds(attempt) if will_retry else None,
+            },
+        )
+        if will_retry:
+            raise task.retry(countdown=_backoff_seconds(attempt))
+        return payload
+    logger.info(message + " completed", extra=payload)
+    return payload
+
+
+@shared_task(
+    bind=True,
+    max_retries=3,
+    soft_time_limit=STORY_EMBED_SOFT_TIME_LIMIT_SECONDS,
+    time_limit=STORY_EMBED_TIME_LIMIT_SECONDS,
+)
+def embed_article_story(self, article_id: int) -> dict:
+    """Embed one Article, then hand it to matching once the embedding exists."""
+
+    payload = _run_story_step(self, embed_step, article_id, "News Story embedding")
+    if payload.get("state") == ArticleStoryProcessing.State.EMBEDDED:
+        match_article_story.delay(article_id)
+    return payload
+
+
+@shared_task(
+    bind=True,
+    max_retries=3,
+    soft_time_limit=STORY_MATCH_SOFT_TIME_LIMIT_SECONDS,
+    time_limit=STORY_MATCH_TIME_LIMIT_SECONDS,
+)
+def match_article_story(self, article_id: int) -> dict:
+    """Assign one embedded Article to its Story."""
+
+    return _run_story_step(self, match_step, article_id, "News Story matching")
+
+
+@shared_task(
+    soft_time_limit=STORY_RECONCILE_SOFT_TIME_LIMIT_SECONDS,
+    time_limit=STORY_RECONCILE_TIME_LIMIT_SECONDS,
+)
+def reconcile_article_stories() -> dict:
+    """Re-dispatch a bounded batch of missing, stale, stuck or retryable Articles.
+
+    Selection and bookkeeping live in the application layer; dispatch happens
+    only after the selecting transaction commits.
+    """
+
+    with transaction.atomic():
+        article_ids = reconciliation_candidates()
+        claim_for_reconciliation(article_ids)
+        for article_id in article_ids:
+            transaction.on_commit(partial(embed_article_story.delay, article_id))
+
+    ingestion_logger(TASK_LOGGER).info(
+        "News Story reconciliation completed",
+        extra={"dispatched": len(article_ids), "limit": settings.NEWS_STORY_RECONCILE_BATCH},
+    )
+    return {"dispatched": len(article_ids)}

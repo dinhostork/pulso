@@ -205,7 +205,7 @@ def test_endpoint_target_validation_allows_controlled_private_dns(source, monkey
 
 
 @pytest.mark.django_db
-def test_news_migrations_have_provenance_publication_story_and_embedding_tables_only():
+def test_news_migrations_have_provenance_publication_and_story_derived_tables_only():
     expected = {
         "news_source",
         "news_sourceendpoint",
@@ -216,6 +216,7 @@ def test_news_migrations_have_provenance_publication_story_and_embedding_tables_
         "news_storyarticle",
         "news_articleembedding",
         "news_storyembedding",
+        "news_articlestoryprocessing",
     }
     with connection.cursor() as cursor:
         cursor.execute("SELECT tablename FROM pg_tables WHERE schemaname = current_schema()")

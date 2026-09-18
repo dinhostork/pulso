@@ -561,6 +561,87 @@ to later reprocessing. Refreshing a Story's embedding as members join, and
 archiving Stories left empty, belong to the Story refresh lifecycle, not to
 matching.
 
+## Story processing
+
+After News Core commits an Article, Story processing embeds it and matches it
+asynchronously (issue #29). It is **derived work**: its failures never change
+an `IngestionRun`, its counters, a `RawArticle` outcome or the Article itself.
+
+| Task | Responsibility |
+| --- | --- |
+| `news.tasks.embed_article_story(article_id)` | Store the Article's embedding for the configured model, then queue matching. |
+| `news.tasks.match_article_story(article_id)` | Assign the Article's primary Story (retrieval and matching as above). |
+| `news.tasks.reconcile_article_stories()` | Re-dispatch a bounded batch of Articles whose Story state is missing, stale, stuck or retryable. |
+
+Tasks take an Article id only and delegate to
+`news/application/story_processing.py`. That module records each Article's
+`ArticleStoryProcessing` row: `state` (`PENDING`, `EMBEDDED`, `MATCHED`,
+`FAILED`), `attempts`, `error_kind`, a bounded `error_message`, and the two
+halves of its pipeline, `embedding_model_key` and `matcher_key`.
+
+**`pipeline_key`** is `<embedding_model_key>|<matcher_key>`. It is computed for
+freshness checks, logs and operator output, and is never stored. An Article is
+fresh only when it is `MATCHED` under the configured pair and still has its
+primary association. Changing the embedding model or the matching policy
+(`matcher_key`) makes it stale on its own, and the stored halves show which one
+moved. A stale association is replaced when the Article is matched again. A
+Story left without members is never a retrieval candidate; marking it for
+refresh and archiving it belong to the Story refresh lifecycle.
+
+**Dispatch.** `news/application/process.py` queues `embed_article_story` with
+a robust `transaction.on_commit` callback when an Article is created or
+updated. A rolled-back transaction queues nothing, and a broker failure is
+logged but never reaches ingestion. This dispatch and the Beat entry below are
+gated by `NEWS_STORY_PROCESSING_ENABLED` (environment; default `false`; always
+`false` in test settings).
+
+**Retries.** The application classifies each failure:
+
+- Transient: `DATABASE_UNAVAILABLE`, `PROVIDER_UNAVAILABLE` (provider timeout
+  or connection error), `STORY_NO_LONGER_ACTIVE`. Retried up to 3 times with
+  the ingestion backoff (30 s · 2^n, capped at 600 s, up to 10% jitter).
+- Permanent: a missing local model or optional group, invalid input, invalid
+  output, dimension mismatch, or `MISSING_EMBEDDING`. Recorded `FAILED` and
+  not retried by the task.
+
+Unexpected errors are recorded as `UNEXPECTED` with the exception class only.
+Every failed execution counts towards `attempts`. Time limits are 120/150 s
+for embedding, 30/60 s for matching and 60/90 s for reconciliation (soft/hard).
+
+**Reconciliation** (Beat `news-story-reconcile`, every
+`NEWS_STORY_RECONCILE_INTERVAL_SECONDS` = 900 s when enabled) selects, in
+article-id order and at most `NEWS_STORY_RECONCILE_BATCH` (200) per sweep:
+
+- Articles with no processing row;
+- rows older than `NEWS_STORY_RECONCILE_AFTER_SECONDS` (600 s) that are stale,
+  stuck in `PENDING`/`EMBEDDED`, `MATCHED` without an association, or `FAILED`
+  with fewer than `NEWS_STORY_PROCESSING_MAX_ATTEMPTS` (6) failed executions.
+
+A `FAILED` row at the cap is no longer dispatched but stays visible. Selected
+rows are claimed (created `PENDING` or touched) before dispatch, so a queued
+Article is not dispatched again before the cutoff. A fully processed database
+dispatches nothing.
+
+**Operator commands** (no HTTP surface; output holds identifiers, states and
+keys only):
+
+```bash
+uv run --locked --env-file .env python manage.py news_story_process --article 42
+uv run --locked --env-file .env python manage.py news_story_process --article 42 --reprocess
+uv run --locked --env-file .env python manage.py news_story_process --article 42 --async
+uv run --locked --env-file .env python manage.py news_story_reconcile --limit 50
+uv run --locked --env-file .env python manage.py news_story_reconcile --async
+```
+
+`--reprocess` deletes that Article's embeddings, primary association and
+processing row, then rebuilds them. It never writes to `Article`,
+`RawArticle`, `IngestionRun`, `Source` or `SourceEndpoint`.
+
+The opt-in `celery_smoke` run includes
+`tests/news/test_story_celery_smoke.py`: a separately running worker embeds and
+matches an Article over Redis. It uses the same worker command as the News
+smoke check below.
+
 ## Local Compose stack
 
 Prerequisites: Docker Engine with BuildKit and Docker Compose v2.20 or newer

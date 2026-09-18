@@ -125,8 +125,26 @@ def test_scheduled_task_names_exist():
     }
 
 
+def test_story_reconciliation_is_scheduled_only_when_story_processing_is_enabled():
+    assert load_settings().NEWS_STORY_PROCESSING_ENABLED is False
+    assert "news-story-reconcile" not in load_settings().CELERY_BEAT_SCHEDULE
+
+    loaded = load_settings(NEWS_STORY_PROCESSING_ENABLED="true", NEWS_INGESTION_ENABLED="false")
+
+    assert loaded.NEWS_STORY_PROCESSING_ENABLED is True
+    assert loaded.CELERY_BEAT_SCHEDULE == {
+        "news-story-reconcile": {
+            "task": tasks.reconcile_article_stories.name,
+            "schedule": float(loaded.NEWS_STORY_RECONCILE_INTERVAL_SECONDS),
+        }
+    }
+    with pytest.raises(ImproperlyConfigured):
+        load_settings(NEWS_STORY_PROCESSING_ENABLED="yes")
+
+
 def test_test_settings_never_schedule_anything():
     # Whatever the environment says, an ordinary test run schedules no jobs.
     assert active_settings.CELERY_BEAT_SCHEDULE == {}
     assert active_settings.NEWS_INGESTION_ENABLED is False
+    assert active_settings.NEWS_STORY_PROCESSING_ENABLED is False
     assert active_settings.CELERY_DIAGNOSTIC_BEAT_ENABLED is False

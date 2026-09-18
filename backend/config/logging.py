@@ -75,6 +75,10 @@ SAFE_FIELDS = (
     "existing_source_slug",
     "incoming_endpoint_id",
     "existing_endpoint_id",
+    # Story processing (#29): identifiers, versions and states only.
+    "story_id",
+    "pipeline_key",
+    "attempts",
     # Retention.
     "deleted",
     "retention_days",

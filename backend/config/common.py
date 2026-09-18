@@ -149,6 +149,20 @@ NEWS_STORY_CANDIDATE_WINDOW_HOURS = 168
 NEWS_STORY_MATCH_MAX_DISTANCE = 0.18
 NEWS_STORY_MATCH_MAX_TIME_GAP_HOURS = 48
 
+# Story processing orchestration (#29). The flag gates only the automatic
+# entry points — dispatch after an Article commits and the reconciliation Beat
+# entry — and is an environment option in config/settings.py (default off).
+# Reconciliation re-dispatches, in article-id order and at most
+# NEWS_STORY_RECONCILE_BATCH per sweep, every Article with no processing row
+# and every row older than NEWS_STORY_RECONCILE_AFTER_SECONDS that is stale,
+# stuck in PENDING/EMBEDDED, or FAILED with fewer than
+# NEWS_STORY_PROCESSING_MAX_ATTEMPTS failed executions.
+NEWS_STORY_PROCESSING_ENABLED = False
+NEWS_STORY_RECONCILE_BATCH = 200
+NEWS_STORY_RECONCILE_AFTER_SECONDS = 600
+NEWS_STORY_RECONCILE_INTERVAL_SECONDS = 900
+NEWS_STORY_PROCESSING_MAX_ATTEMPTS = 6
+
 # One RUNNING ingestion run younger than this is assumed to be in flight: the
 # poll dispatcher skips its endpoint (#19) and `news_runs --stale` does not
 # report it (#20). One fixed operational constant, shared so the two views can
