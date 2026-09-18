@@ -465,6 +465,48 @@ uv run --locked --group embeddings pytest -m local_embedding
 The `local_embedding` test is excluded from the default `pytest` run, just as
 `celery_smoke` is. A later plain `uv sync --locked` removes the group again.
 
+## Story candidate retrieval
+
+`news.application.story_candidates.find_candidates(article_id, model_key)`
+returns, nearest first, the existing Stories that could plausibly be the same
+event as one Article (issue #27). It does not decide a match, and it only
+reads: it creates no Story, association or embedding and changes no status.
+
+A candidate is a frozen `StoryCandidate` holding `story_id`, `distance`
+(pgvector cosine distance), `member_count`, `last_article_published_at`,
+`language` and `status`. It never holds a model instance or any text. An
+Article with no stored embedding for `model_key` raises
+`MissingArticleEmbedding`. An empty tuple always means "no Story within
+bounds", never "not embedded".
+
+| Setting | Value | Retrieval bound |
+| --- | --- | --- |
+| `NEWS_STORY_CANDIDATE_LIMIT` | `10` | Most candidates returned. |
+| `NEWS_STORY_CANDIDATE_MAX_DISTANCE` | `0.5` | Largest cosine distance returned. |
+| `NEWS_STORY_CANDIDATE_WINDOW_HOURS` | `168` | A Story's member publication range must overlap this many hours on either side of the Article's publication time. |
+
+These are **recall bounds, not the match threshold**. They are deliberately
+generous so the right Story is never lost, and they cap the work and memory
+one Article can cause. The matching decision applies its own, stricter
+threshold to the returned distances. If changing a retrieval bound changes
+which Story an Article joins, the threshold has leaked into retrieval.
+
+Filters: same `model_key` (vectors from different models are never compared),
+`ACTIVE` Stories only, the same primary language subtag (`en` matches
+`en-GB`), and at least one member. Times are publication times, using
+`first_seen_at` when `published_at` is missing, for the Article and every
+member alike. `Story.created_at` and the current clock are never used.
+
+The query is a single PostgreSQL statement: it computes the distance, applies
+the filters, orders by (`distance`, `story_id`) and applies the limit. No
+vector is loaded into Python. The scan is **exact**: pgvector's approximate
+indexes (HNSW/IVFFlat) need a fixed vector dimension, which the
+multi-model `StoryEmbedding.vector` column does not have. They would also make
+results approximate and tie order unstable. The selective predicates already
+have ordinary indexes: `StoryEmbedding.model_key`, `Story.status` and the
+StoryArticle membership index. Revisit a per-model approximate index only
+when Story volume makes the exact scan measurably slow.
+
 ## Local Compose stack
 
 Prerequisites: Docker Engine with BuildKit and Docker Compose v2.20 or newer

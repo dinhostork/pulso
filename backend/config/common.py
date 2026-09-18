@@ -114,6 +114,17 @@ NEWS_EMBEDDING_PROVIDER = "local"
 NEWS_EMBEDDING_MAX_BATCH = 32
 NEWS_EMBEDDING_MAX_INPUT_CHARS = 2000
 
+# Story candidate retrieval (#27). These are recall bounds that cap the work
+# one Article can cause; they are deliberately generous and are NOT the match
+# threshold, which the matching decision applies to the returned distances.
+# If tuning them changes match outcomes, the threshold has leaked into
+# retrieval. Distance is pgvector cosine distance (0 identical, 2 opposite);
+# the window is in hours around the Article's publication time and must
+# overlap a Story's member publication range.
+NEWS_STORY_CANDIDATE_LIMIT = 10
+NEWS_STORY_CANDIDATE_MAX_DISTANCE = 0.5
+NEWS_STORY_CANDIDATE_WINDOW_HOURS = 168
+
 # One RUNNING ingestion run younger than this is assumed to be in flight: the
 # poll dispatcher skips its endpoint (#19) and `news_runs --stale` does not
 # report it (#20). One fixed operational constant, shared so the two views can
