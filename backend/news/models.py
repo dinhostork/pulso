@@ -294,13 +294,33 @@ class Story(models.Model):
     archived rather than deleted, so its id stays stable for diagnostics. The
     schema therefore allows a Story with no members; the transition itself is
     not performed here.
+
+    Refresh state and membership counters are derived and recomputable. A
+    STALE or FAILED Story retains its previous coherent generation. There is
+    intentionally no StoryUpdate history table in v0.3: refresh_state,
+    is_current and per-row signatures answer the current operator questions.
     """
 
     class Status(models.TextChoices):
         ACTIVE = "ACTIVE", "Active"
         ARCHIVED = "ARCHIVED", "Archived"
 
+    class RefreshState(models.TextChoices):
+        CURRENT = "CURRENT", "Current"
+        STALE = "STALE", "Stale"
+        FAILED = "FAILED", "Failed"
+
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
+    refresh_state = models.CharField(
+        max_length=16, choices=RefreshState.choices, default=RefreshState.STALE
+    )
+    member_signature = models.CharField(max_length=64, blank=True)
+    refreshed_at = models.DateTimeField(null=True, blank=True)
+    refresh_error = models.CharField(max_length=512, blank=True)
+    article_count = models.PositiveIntegerField(default=0)
+    source_count = models.PositiveIntegerField(default=0)
+    first_published_at = models.DateTimeField(null=True, blank=True)
+    last_published_at = models.DateTimeField(null=True, blank=True)
     language = models.CharField(max_length=35)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -457,6 +477,7 @@ class StoryEmbedding(models.Model):
 
     `member_count` is how many member Articles the vector was computed from,
     so a later refresh can tell a stale representation from a current one.
+    A null member_signature denotes an unstamped pre-#32 derived row.
     """
 
     story = models.ForeignKey(
@@ -466,6 +487,7 @@ class StoryEmbedding(models.Model):
     dimension = models.PositiveSmallIntegerField()
     vector = VectorField()
     member_count = models.PositiveIntegerField()
+    member_signature = models.CharField(max_length=64, null=True, blank=True)
     generated_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
@@ -577,7 +599,7 @@ def _enrichment_constraints(prefix):
 
 
 class StoryTopic(models.Model):
-    """Derived, disposable link from a Story to a Topic, stamped with its extractor."""
+    """Derived Topic link; null signature denotes unstamped pre-#32 provenance."""
 
     # The unique (story, topic) index leads with `story`.
     story = models.ForeignKey(
@@ -586,6 +608,7 @@ class StoryTopic(models.Model):
     topic = models.ForeignKey(Topic, on_delete=models.PROTECT, related_name="story_topics")
     score = models.FloatField()
     model_key = models.CharField(max_length=MAX_MODEL_KEY_LENGTH)
+    member_signature = models.CharField(max_length=64, null=True, blank=True)
     generated_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
@@ -596,7 +619,7 @@ class StoryTopic(models.Model):
 
 
 class StoryEntity(models.Model):
-    """Derived, disposable link from a Story to an Entity, stamped with its extractor."""
+    """Derived Entity link; null signature denotes unstamped pre-#32 provenance."""
 
     # The unique (story, entity) index leads with `story`.
     story = models.ForeignKey(
@@ -605,6 +628,7 @@ class StoryEntity(models.Model):
     entity = models.ForeignKey(Entity, on_delete=models.PROTECT, related_name="story_entities")
     score = models.FloatField()
     model_key = models.CharField(max_length=MAX_MODEL_KEY_LENGTH)
+    member_signature = models.CharField(max_length=64, null=True, blank=True)
     generated_at = models.DateTimeField(default=timezone.now)
 
     class Meta:

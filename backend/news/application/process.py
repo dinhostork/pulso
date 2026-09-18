@@ -258,6 +258,13 @@ def _update(raw: RawArticle, normalized: NormalizedArticle, article: Article) ->
     for field, value in values.items():
         setattr(article, field, value)
     article.save(update_fields=[*values, "updated_at"])
+    from news.application.story_refresh import mark_story_stale
+    from news.models import StoryArticle
+
+    for story_id in StoryArticle.objects.filter(article_id=article.pk).values_list(
+        "story_id", flat=True
+    ):
+        mark_story_stale(story_id, reason="article_revised")
     result = _finish(raw, article, RawArticle.Outcome.ARTICLE_UPDATED)
     _schedule_story_processing(article.pk)
     return result

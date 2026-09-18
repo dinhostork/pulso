@@ -84,6 +84,34 @@ class _Snapshot:
     input: SynthesisInput
 
 
+@dataclass(frozen=True)
+class ComputedSynthesis:
+    model_key: str
+    elements: tuple[SynthesisElement, ...]
+    input_article_count: int
+
+
+def synthesis_input_from_members(story_id: int, members: tuple[object, ...]) -> SynthesisInput:
+    """Apply #31's bounds and ordering to the captured refresh members."""
+
+    ordered = sorted(members, key=lambda member: (member.event_time, member.article_id))
+    return SynthesisInput(
+        story_id=story_id,
+        articles=tuple(
+            SynthesisArticle(
+                article_id=member.article_id,
+                source_slug=member.source_slug,
+                title=" ".join(member.title.split()),
+                published_at=member.event_time,
+                text=" ".join((member.body_text or member.description).split())[
+                    : settings.NEWS_STORY_SYNTHESIS_MAX_CHARS_PER_ARTICLE
+                ],
+            )
+            for member in ordered[: settings.NEWS_STORY_SYNTHESIS_MAX_ARTICLES]
+        ),
+    )
+
+
 def _snapshot(story_id: int) -> _Snapshot:
     members = Article.objects.filter(story_articles__story_id=story_id)
     signature = member_signature(members.values_list("pk", "updated_at"))
@@ -175,6 +203,59 @@ def _current(story_id: int, signature: str, model_key: str) -> StorySynthesis | 
     ).first()
 
 
+def compute_story_synthesis(
+    prepared: SynthesisInput, *, synthesizer: StorySynthesizer | None = None
+) -> ComputedSynthesis:
+    """Run and validate the synthesizer without ORM access or writes."""
+
+    synthesizer = synthesizer or ExtractiveSynthesizer()
+    model_key = synthesizer.identity.model_key
+    try:
+        if not prepared.articles:
+            raise SynthesisError(
+                SynthesisErrorKind.NO_MEMBERS, "Story has no member Articles.", model_key=model_key
+            )
+        try:
+            result = synthesizer.synthesize(prepared)
+        except SynthesisError:
+            raise
+        except Exception:
+            raise SynthesisError(
+                SynthesisErrorKind.SYNTHESIZER_FAILED, "Synthesizer failed.", model_key=model_key
+            ) from None
+        elements = _validated(
+            result, {article.article_id for article in prepared.articles}, model_key
+        )
+    except SynthesisError as error:
+        raise _fail(prepared.story_id, error) from None
+    return ComputedSynthesis(model_key, elements, len(prepared.articles))
+
+
+def persist_story_synthesis(
+    story_id: int, signature: str, computed: ComputedSynthesis
+) -> StorySynthesis:
+    """Promote already validated elements; caller holds the Story lock."""
+
+    StorySynthesis.objects.filter(story_id=story_id, is_current=True).update(is_current=False)
+    synthesis = StorySynthesis.objects.create(
+        story_id=story_id, model_key=computed.model_key, member_signature=signature
+    )
+    positions = dict.fromkeys(ELEMENT_KINDS, 0)
+    for element in computed.elements:
+        row = StorySynthesisElement.objects.create(
+            synthesis=synthesis,
+            kind=element.kind,
+            position=positions[element.kind],
+            text=element.text,
+        )
+        positions[element.kind] += 1
+        StorySynthesisElementSource.objects.bulk_create(
+            StorySynthesisElementSource(element=row, article_id=article_id, position=index)
+            for index, article_id in enumerate(element.article_ids)
+        )
+    return synthesis
+
+
 def synthesize_story(
     story_id: int, *, synthesizer: StorySynthesizer | None = None
 ) -> SynthesisSummary:
@@ -186,48 +267,27 @@ def synthesize_story(
     snapshot = _snapshot(story_id)
     try:
         if not snapshot.input.articles:
-            raise SynthesisError(
-                SynthesisErrorKind.NO_MEMBERS, "Story has no member Articles.", model_key=model_key
+            raise _fail(
+                story_id,
+                SynthesisError(
+                    SynthesisErrorKind.NO_MEMBERS,
+                    "Story has no member Articles.",
+                    model_key=model_key,
+                ),
             )
         existing = _current(story_id, snapshot.signature, model_key)
         if existing is not None:
             return _summary(existing, snapshot, created=False)
-        try:
-            result = synthesizer.synthesize(snapshot.input)
-        except SynthesisError:
-            raise
-        except Exception:
-            # Third-party errors may carry prompts or source text; keep none of it.
-            raise SynthesisError(
-                SynthesisErrorKind.SYNTHESIZER_FAILED, "Synthesizer failed.", model_key=model_key
-            ) from None
-        members = {article.article_id for article in snapshot.input.articles}
-        elements = _validated(result, members, model_key)
+        computed = compute_story_synthesis(snapshot.input, synthesizer=synthesizer)
     except SynthesisError as error:
-        raise _fail(story_id, error) from None
+        raise error from None
 
     with transaction.atomic():
         Story.objects.select_for_update().get(pk=story_id)
         existing = _current(story_id, snapshot.signature, model_key)
         if existing is not None:
             return _summary(existing, snapshot, created=False)
-        StorySynthesis.objects.filter(story_id=story_id, is_current=True).update(is_current=False)
-        synthesis = StorySynthesis.objects.create(
-            story_id=story_id, model_key=model_key, member_signature=snapshot.signature
-        )
-        positions = dict.fromkeys(ELEMENT_KINDS, 0)
-        for element in elements:
-            row = StorySynthesisElement.objects.create(
-                synthesis=synthesis,
-                kind=element.kind,
-                position=positions[element.kind],
-                text=element.text,
-            )
-            positions[element.kind] += 1
-            StorySynthesisElementSource.objects.bulk_create(
-                StorySynthesisElementSource(element=row, article_id=article_id, position=index)
-                for index, article_id in enumerate(element.article_ids)
-            )
+        synthesis = persist_story_synthesis(story_id, snapshot.signature, computed)
     summary = _summary(synthesis, snapshot, created=True)
     ingestion_logger(SYNTHESIS_LOGGER).info(
         "News Story synthesis completed",

@@ -94,7 +94,21 @@ def provenance_snapshot():
 def test_story_and_article_are_separate_tables_without_story_columns_on_provenance():
     assert Story._meta.db_table == "news_story"
     assert Article._meta.db_table == "news_article"
-    assert table_columns("news_story") == {"id", "status", "language", "created_at", "updated_at"}
+    assert table_columns("news_story") == {
+        "id",
+        "status",
+        "language",
+        "created_at",
+        "updated_at",
+        "refresh_state",
+        "member_signature",
+        "refreshed_at",
+        "refresh_error",
+        "article_count",
+        "source_count",
+        "first_published_at",
+        "last_published_at",
+    }
     for table in ("news_article", "news_rawarticle"):
         assert not {column for column in table_columns(table) if "story" in column}, table
 

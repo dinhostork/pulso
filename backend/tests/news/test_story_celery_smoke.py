@@ -22,9 +22,12 @@ from news.models import (
     RawArticle,
     Source,
     SourceEndpoint,
+    Story,
     StoryArticle,
+    StoryEmbedding,
+    StorySynthesis,
 )
-from news.tasks import embed_article_story
+from news.tasks import embed_article_story, refresh_story_task
 
 TIMEOUT_SECONDS = 30
 
@@ -103,3 +106,22 @@ def test_story_pipeline_runs_through_a_separately_running_worker():
     assert replay["state"] == ArticleStoryProcessing.State.MATCHED
     assert StoryArticle.objects.filter(article=article).count() == 1
     assert ArticleEmbedding.objects.filter(article=article).count() == 1
+
+
+@pytest.mark.celery_smoke
+@pytest.mark.django_db(transaction=True)
+def test_story_refresh_runs_through_a_separately_running_worker():
+    article = make_article()
+    story = Story.objects.create(language="en")
+    StoryArticle.objects.create(
+        story=story, article=article, is_primary=True, method=StoryArticle.Method.MANUAL
+    )
+    payload = refresh_story_task.delay(story.pk, reason="smoke").get(timeout=TIMEOUT_SECONDS)
+    assert payload["outcome"] == "REFRESHED"
+    story.refresh_from_db()
+    assert story.refresh_state == Story.RefreshState.CURRENT
+    assert StoryEmbedding.objects.get(story=story).member_signature == story.member_signature
+    assert (
+        StorySynthesis.objects.get(story=story, is_current=True).member_signature
+        == story.member_signature
+    )

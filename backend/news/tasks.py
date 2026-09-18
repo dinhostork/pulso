@@ -39,8 +39,17 @@ from news.application.story_processing import (
     match_step,
     reconciliation_candidates,
 )
+from news.application.story_refresh import RefreshOutcome
+from news.application.story_refresh import refresh_story as refresh_story_app
 from news.logging import ingestion_logger
-from news.models import Article, ArticleStoryProcessing, IngestionRun, RawArticle, SourceEndpoint
+from news.models import (
+    Article,
+    ArticleStoryProcessing,
+    IngestionRun,
+    RawArticle,
+    SourceEndpoint,
+    Story,
+)
 
 TASK_LOGGER = "pulso.news.tasks"
 
@@ -398,3 +407,30 @@ def reconcile_article_stories() -> dict:
         extra={"dispatched": len(article_ids), "limit": settings.NEWS_STORY_RECONCILE_BATCH},
     )
     return {"dispatched": len(article_ids)}
+
+
+@shared_task(bind=True, max_retries=3, soft_time_limit=180, time_limit=210)
+def refresh_story_task(self, story_id: int, *, reason: str = "membership_changed") -> dict:
+    """Refresh one Story; retry only typed transient failures with bounded backoff."""
+
+    try:
+        result = refresh_story_app(story_id, reason=reason)
+    except Story.DoesNotExist:
+        return {"story_id": story_id, "outcome": "MISSING"}
+    except OperationalError as error:
+        raise self.retry(countdown=_backoff_seconds(self.request.retries), exc=error) from error
+    payload = {
+        "story_id": result.story_id,
+        "outcome": str(result.outcome),
+        "member_signature": result.member_signature,
+        "article_count": result.article_count,
+        "source_count": result.source_count,
+        "error_kind": result.error_kind,
+    }
+    if (
+        result.outcome == RefreshOutcome.FAILED
+        and result.retryable
+        and self.request.retries < self.max_retries
+    ):
+        raise self.retry(countdown=_backoff_seconds(self.request.retries))
+    return payload

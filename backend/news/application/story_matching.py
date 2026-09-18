@@ -31,6 +31,7 @@ from django.db import IntegrityError, transaction
 
 from news.application.embeddings import configured_provider
 from news.application.story_candidates import find_candidates
+from news.application.story_refresh import mark_story_stale
 from news.domain.embeddings import story_vector
 from news.domain.stories import StoryCandidate
 from news.domain.story_matching import (
@@ -156,6 +157,7 @@ def _apply(
             member_count=1,
         )
         state = MatchState.CREATED_STORY
+    mark_story_stale(story.pk, reason="membership_added")
     return MatchOutcome(snapshot.article_id, story.pk, association.pk, state, decision)
 
 

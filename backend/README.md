@@ -646,8 +646,8 @@ smoke check below.
 
 `news.application.story_enrichment.extract_story_enrichment(story_id)`
 describes a Story with reusable `Topic` and `Entity` rows (issue #30). It
-returns an `EnrichmentSummary` (counts and `model_key`s). Nothing dispatches
-it yet; the Story refresh lifecycle will decide when it runs.
+returns an `EnrichmentSummary` (counts and `model_key`s). The Story refresh
+lifecycle also uses its compute and persistence seams.
 
 Extracted data is **derived**. An `Entity` is a machine reading of source
 text, not an independent fact (ADR-0004). `Topic` (`slug`, `label`) and
@@ -684,8 +684,8 @@ extractor's `model_key` and `generated_at`.
 `news.application.story_synthesis.synthesize_story(story_id)` gives a Story a
 title, summary and context built only from its member Articles (issue #31).
 It returns a `SynthesisSummary` (identifiers, `model_key`,
-`member_signature` and counts). Nothing dispatches it yet; the Story refresh
-lifecycle will decide when it runs.
+`member_signature` and counts). The Story refresh lifecycle also uses its
+compute and persistence seams.
 
 The output is **derived**: sources support the information, and synthesis
 organizes it (ADR-0004). It is also **impersonal**: `synthesize_story` takes
@@ -723,6 +723,70 @@ reads the same for everyone (ADR-0008).
   no Article outside the Story. One transaction then demotes the previous
   generation and writes the new one. A failure raises `SynthesisError` and logs
   identifiers only, and the previous current synthesis stays in place.
+
+## Story refresh
+
+`news.application.story_refresh.refresh_story(story_id, reason=...)` coordinates
+the embedding, Topics, Entities, synthesis and membership counters as one
+generation. `Story.refresh_state` is `STALE` before the first refresh and after
+membership or member Article revision changes, `CURRENT` after coherent
+promotion, and `FAILED` when the current membership cannot be refreshed.
+`refreshed_at` is null until the first success. The bounded `refresh_error`
+holds an error kind, never publication text or provider output.
+
+The generation key is the existing SHA-256 `member_signature` over **all**
+sorted member `article_id:Article.updated_at` pairs. A short, read-only
+snapshot captures every member's revision, source, text and event time, plus
+exact article/source counts and publication window. Component-specific limits
+apply after this snapshot. Embedding computes directly from the captured
+Article text, so an old `ArticleEmbedding` cannot hide a newer revision.
+Enrichment and synthesis use their own bounded preparation and validation
+rules. Compute makes no database writes and holds no transaction or Story
+lock.
+
+A short PostgreSQL compare-and-swap transaction locks the Story, recomputes
+the full membership signature and discards the entire computed result if it
+moved. That pass leaves the Story `STALE` and queues another refresh after
+commit. If it matches, one transaction promotes all derived rows with the
+same signature and updates `Story` metadata to `CURRENT`. Concurrent readers
+therefore see one complete committed generation. A `CURRENT` Story with the
+same signature and complete derived rows is a read-only no-op, including on
+Celery redelivery. No Redis lock is used.
+
+`Story` existence, `StoryArticle` membership, `status` and `refresh_state`
+are immediately authoritative. Embeddings, Topics, Entities, synthesis,
+`article_count`, `source_count` and the publication window are eventually
+refreshed. A `STALE` or `FAILED` Story retains its previous coherent derived
+generation. A failed computation records only safe, bounded metadata for the
+same membership signature; an older failure cannot overwrite newer `STALE`
+state. An empty Story refresh skips computation, archives the Story, sets zero
+counts and null dates, and retains previous derived rows for inspection.
+
+The `StoryEmbedding`, `StoryTopic` and `StoryEntity` signatures added in
+migration 0010 are nullable. `NULL` means a pre-#32 or standalone derived row
+whose exact membership provenance cannot be proven. Refresh stamps each new
+current row with the winning signature; migration 0010 does not invent a
+signature for legacy data. There is intentionally no `StoryUpdate` table in
+v0.3: state, current synthesis and row signatures answer present operator
+questions without an unused history schema.
+
+Matching, reassignment and reprocessing mark affected Stories `STALE` in the
+membership transaction. News Core revision processing does the same for
+existing member Stories when `Article.updated_at` advances. When Story
+processing is enabled, a named `transaction.on_commit` callback queues
+`refresh_story_task(story_id, reason)`. Rolled-back transactions queue nothing.
+The task carries identifiers only, retries transient failures up to three
+times with the existing bounded backoff, and leaves permanent failures
+terminal and visible. Its soft/hard time limits are 180/210 seconds.
+
+```bash
+uv run --locked --env-file .env python manage.py news_story_refresh --story 123
+uv run --locked --env-file .env python manage.py news_story_refresh --story 123 --async
+uv run --locked --env-file .env python manage.py news_story_refresh --stale-failed --limit 100
+uv run --locked --env-file .env python manage.py news_story_refresh --stale-failed --limit 100 --async
+```
+
+The sweep selects Story ids in ascending order and bounds `--limit` to 1–1000.
 
 ## Local Compose stack
 

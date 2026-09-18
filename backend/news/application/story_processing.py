@@ -57,6 +57,7 @@ from news.application.embeddings import configured_provider, embed_article
 from news.application.story_candidates import MissingArticleEmbedding
 from news.application.story_matching import MATCHER_KEY, StoryNoLongerActive, match_article
 from news.application.story_ports import EmbeddingError
+from news.application.story_refresh import mark_story_stale
 from news.models import Article, ArticleEmbedding, ArticleStoryProcessing, StoryArticle
 
 State = ArticleStoryProcessing.State
@@ -226,6 +227,7 @@ def match_step(article_id: int) -> StepResult:
                 or current.evidence.get("embedding_model_key") != keys.embedding_model_key
             ):
                 current.delete()
+                mark_story_stale(current.story_id, reason="membership_removed")
             outcome = match_article(article_id, model_key=keys.embedding_model_key)
             row.state = State.MATCHED
             row.embedding_model_key = keys.embedding_model_key
@@ -257,7 +259,14 @@ def reprocess_article(article_id: int) -> StepResult:
 
     Article.objects.only("pk").get(pk=article_id)
     with transaction.atomic():
+        old_story_ids = list(
+            StoryArticle.objects.filter(article_id=article_id, is_primary=True).values_list(
+                "story_id", flat=True
+            )
+        )
         StoryArticle.objects.filter(article_id=article_id, is_primary=True).delete()
+        for story_id in old_story_ids:
+            mark_story_stale(story_id, reason="membership_removed")
         ArticleEmbedding.objects.filter(article_id=article_id).delete()
         ArticleStoryProcessing.objects.filter(article_id=article_id).delete()
     return process_article(article_id)

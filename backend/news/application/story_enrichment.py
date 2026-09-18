@@ -20,6 +20,8 @@ the service runs is decided by the Story refresh lifecycle (#32), not here.
 
 import math
 from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Mapping
 
 from django.conf import settings
 from django.db import transaction
@@ -56,6 +58,14 @@ class EnrichmentSummary:
     entity_model_key: str
 
 
+@dataclass(frozen=True)
+class ComputedEnrichment:
+    topic_model_key: str
+    entity_model_key: str
+    topics: Mapping[str, tuple[str, float]]
+    entities: Mapping[tuple[str, str], tuple[str, float]]
+
+
 def default_extractor() -> RuleBasedEnrichmentExtractor:
     return RuleBasedEnrichmentExtractor(
         max_topics=settings.NEWS_STORY_MAX_TOPICS, max_entities=settings.NEWS_STORY_MAX_ENTITIES
@@ -86,6 +96,27 @@ def story_text(story_id: int) -> StoryText:
                 ),
             )
             for article_id, title, description, body_text in members
+        ),
+    )
+
+
+def story_text_from_members(story_id: int, members: tuple[object, ...]) -> StoryText:
+    """Apply #30's ordering and bounds to captured refresh members."""
+
+    ordered = sorted(members, key=lambda member: (member.event_time, member.article_id))
+    return StoryText(
+        story_id=story_id,
+        articles=tuple(
+            ArticleText(
+                article_id=member.article_id,
+                text=article_embedding_input(
+                    title=member.title,
+                    description=member.description,
+                    body_text=member.body_text,
+                    max_chars=settings.NEWS_STORY_ENRICHMENT_MAX_CHARS_PER_ARTICLE,
+                ),
+            )
+            for member in ordered[: settings.NEWS_STORY_ENRICHMENT_MAX_ARTICLES]
         ),
     )
 
@@ -157,20 +188,18 @@ def _fail(story_id: int, error: EnrichmentError) -> EnrichmentError:
     return error
 
 
-def extract_story_enrichment(
-    story_id: int,
+def compute_story_enrichment(
+    text: StoryText,
     *,
     topic_extractor: TopicExtractor | None = None,
     entity_extractor: EntityExtractor | None = None,
-) -> EnrichmentSummary:
-    """Replace the Story's Topics and Entities with a fresh extraction."""
+) -> ComputedEnrichment:
+    """Validate extraction from prepared text without reading or writing the database."""
 
     topic_extractor = topic_extractor or default_extractor()
     entity_extractor = entity_extractor or default_extractor()
     topic_key = topic_extractor.identity.model_key
     entity_key = entity_extractor.identity.model_key
-    Story.objects.only("pk").get(pk=story_id)
-    text = story_text(story_id)
     try:
         if not text.articles:
             raise EnrichmentError(
@@ -181,19 +210,29 @@ def extract_story_enrichment(
             _call(entity_extractor.extract_entities, text, entity_key), entity_key
         )
     except EnrichmentError as error:
-        raise _fail(story_id, error) from None
+        raise _fail(text.story_id, error) from None
+
+    return ComputedEnrichment(
+        topic_key, entity_key, MappingProxyType(topics), MappingProxyType(entities)
+    )
+
+
+def persist_story_enrichment(
+    story_id: int, computed: ComputedEnrichment, signature: str | None = None
+) -> EnrichmentSummary:
+    """Replace one Story's enrichment set; caller may provide an enclosing transaction."""
 
     generated_at = timezone.now()
     with transaction.atomic():
         topic_rows = {
             slug: Topic.objects.get_or_create(slug=slug, defaults={"label": label})[0]
-            for slug, (label, _score) in topics.items()
+            for slug, (label, _score) in computed.topics.items()
         }
         entity_rows = {
             key: Entity.objects.get_or_create(
                 kind=key[0], normalized_key=key[1], defaults={"display_name": name}
             )[0]
-            for key, (name, _score) in entities.items()
+            for key, (name, _score) in computed.entities.items()
         }
         StoryTopic.objects.filter(story_id=story_id).delete()
         StoryEntity.objects.filter(story_id=story_id).delete()
@@ -202,29 +241,52 @@ def extract_story_enrichment(
                 story_id=story_id,
                 topic=topic_rows[slug],
                 score=score,
-                model_key=topic_key,
+                model_key=computed.topic_model_key,
+                member_signature=signature,
                 generated_at=generated_at,
             )
-            for slug, (_label, score) in topics.items()
+            for slug, (_label, score) in computed.topics.items()
         )
         StoryEntity.objects.bulk_create(
             StoryEntity(
                 story_id=story_id,
                 entity=entity_rows[key],
                 score=score,
-                model_key=entity_key,
+                model_key=computed.entity_model_key,
+                member_signature=signature,
                 generated_at=generated_at,
             )
-            for key, (_name, score) in entities.items()
+            for key, (_name, score) in computed.entities.items()
         )
-    summary = EnrichmentSummary(story_id, len(topics), len(entities), topic_key, entity_key)
+    summary = EnrichmentSummary(
+        story_id,
+        len(computed.topics),
+        len(computed.entities),
+        computed.topic_model_key,
+        computed.entity_model_key,
+    )
     ingestion_logger(ENRICHMENT_LOGGER).info(
         "News Story enrichment completed",
         extra={
             "story_id": story_id,
             "topic_count": summary.topic_count,
             "entity_count": summary.entity_count,
-            "model_key": entity_key,
+            "model_key": computed.entity_model_key,
         },
     )
     return summary
+
+
+def extract_story_enrichment(
+    story_id: int,
+    *,
+    topic_extractor: TopicExtractor | None = None,
+    entity_extractor: EntityExtractor | None = None,
+) -> EnrichmentSummary:
+    """Replace the Story's Topics and Entities with a fresh extraction."""
+
+    Story.objects.only("pk").get(pk=story_id)
+    computed = compute_story_enrichment(
+        story_text(story_id), topic_extractor=topic_extractor, entity_extractor=entity_extractor
+    )
+    return persist_story_enrichment(story_id, computed)

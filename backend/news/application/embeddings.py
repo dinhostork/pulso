@@ -11,6 +11,7 @@ Embedding never writes to `Article`, `RawArticle`, `Story` or `StoryArticle`.
 
 import math
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
@@ -211,4 +212,47 @@ def embed_story(story_id: int, provider: EmbeddingProvider) -> StoryEmbedding:
         StoryEmbedding,
         {"story_id": story_id, "model_key": key},
         {"dimension": identity.dimension, "vector": list(vector), "member_count": len(member_ids)},
+    )
+
+
+@dataclass(frozen=True)
+class ComputedStoryEmbedding:
+    model_key: str
+    dimension: int
+    vector: Vector
+    member_count: int
+
+
+def compute_story_embedding(
+    members: Sequence[object], provider: EmbeddingProvider
+) -> ComputedStoryEmbedding:
+    """Compute from captured Article fields only; never consult or write embeddings."""
+
+    identity = provider.identity
+    if not members:
+        raise EmbeddingError(
+            EmbeddingErrorKind.INVALID_INPUT,
+            "Story has no member Articles.",
+            model_key=identity.model_key,
+        )
+    texts = [
+        article_embedding_input(
+            title=member.title,
+            description=member.description,
+            body_text=member.body_text,
+            max_chars=settings.NEWS_EMBEDDING_MAX_INPUT_CHARS,
+        )
+        for member in members
+    ]
+    vectors = embed_texts(provider, texts)
+    try:
+        vector = story_vector(vectors)
+    except ValueError:
+        raise EmbeddingError(
+            EmbeddingErrorKind.INVALID_OUTPUT,
+            "Member vectors cannot be combined into a Story vector.",
+            model_key=identity.model_key,
+        ) from None
+    return ComputedStoryEmbedding(
+        identity.model_key, identity.dimension, _checked_vector(vector, identity), len(members)
     )
