@@ -5,6 +5,10 @@ live sites. Individual files isolate parser, identity, normalization or
 deduplication scenarios; `test_news_core_end_to_end.py` verifies composition
 across the application pipeline using a loopback HTTP server.
 
+Story matching has its own labeled corpus of expected event groupings in
+[`stories/`](stories/README.md). It is a JSON corpus loaded straight into
+persistence, not feed bytes.
+
 | File | Format | Scenario and expected layer/result |
 | --- | --- | --- |
 | `atom_valid.xml` | Atom | Two accepted Atom publications; adapter mapping. |

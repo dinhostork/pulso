@@ -1,0 +1,371 @@
+{
+  "schema_version": 1,
+  "anchor": "2026-03-02T12:00:00+00:00",
+  "scenarios": {
+    "same_event_different_source": {
+      "description": "One event reported independently by different Sources.",
+      "article_ids": [
+        "harbor-storm-01",
+        "harbor-storm-02",
+        "varrow-budget-01",
+        "varrow-budget-02"
+      ]
+    },
+    "same_event_different_wording": {
+      "description": "One event described with very different vocabulary.",
+      "article_ids": [
+        "harbor-storm-01",
+        "harbor-storm-03",
+        "kestrel-quake-01",
+        "kestrel-quake-02"
+      ]
+    },
+    "same_topic_different_event": {
+      "description": "Same subject (municipal budget votes) but separate decisions.",
+      "article_ids": [
+        "varrow-budget-01",
+        "varrow-budget-02",
+        "lowmere-budget-01",
+        "lowmere-budget-02"
+      ]
+    },
+    "same_entities_different_event": {
+      "description": "The same people and institutions in two different events.",
+      "article_ids": [
+        "varrow-budget-01",
+        "calloway-reelection-01",
+        "calloway-reelection-02"
+      ]
+    },
+    "same_event_later_reporting": {
+      "description": "Follow-up coverage of an event that already has a Story.",
+      "article_ids": [
+        "harbor-storm-01",
+        "harbor-storm-04",
+        "almen-flood-01",
+        "almen-flood-03"
+      ]
+    },
+    "temporally_distant_similar_event": {
+      "description": "A near-repeat of an earlier event months later.",
+      "article_ids": [
+        "harbor-storm-01",
+        "harbor-storm-02",
+        "harbor-second-storm-01",
+        "harbor-second-storm-02"
+      ]
+    },
+    "syndicated_duplicate_publication": {
+      "description": "A syndicated copy linked by duplicate_of, plus an independent report of the same event.",
+      "article_ids": [
+        "rail-strike-01",
+        "rail-strike-02",
+        "rail-strike-03"
+      ]
+    },
+    "high_lexical_overlap_different_event": {
+      "description": "Templated reports sharing most words about different events.",
+      "article_ids": [
+        "kestrel-quake-01",
+        "almen-quake-01",
+        "kestrel-quake-02"
+      ]
+    },
+    "clearly_unrelated_events": {
+      "description": "Events with nothing in common.",
+      "article_ids": [
+        "museum-maps-01",
+        "museum-maps-02",
+        "chess-final-01",
+        "rail-strike-01"
+      ]
+    },
+    "story_drift_boundary": {
+      "description": "A long-running situation whose later coverage must not absorb a distinct new event.",
+      "article_ids": [
+        "almen-flood-01",
+        "almen-flood-02",
+        "almen-flood-03",
+        "almen-inquiry-01",
+        "almen-inquiry-02"
+      ]
+    }
+  },
+  "articles": [
+    {
+      "id": "harbor-storm-01",
+      "source_slug": "elsby-courier",
+      "title": "Storm forces closure of Elsby harbor",
+      "body": "The Elsby Harbor Authority closed the harbor on Monday after overnight gales damaged two piers. Harbor master Oren Vasko said no vessels may enter or leave until engineers inspect the damage.",
+      "language": "en",
+      "published_offset_minutes": 0,
+      "expected_event": "elsby-harbor-storm-closure",
+      "note": "First report of the harbor closure; anchors the event."
+    },
+    {
+      "id": "harbor-storm-02",
+      "source_slug": "kestrel-post",
+      "title": "Elsby harbor shut after gales damage piers",
+      "body": "Elsby's harbor was closed to all shipping on Monday when storm winds broke sections of two piers, the harbor authority said. Inspections are expected to take several days.",
+      "language": "en",
+      "published_offset_minutes": 40,
+      "expected_event": "elsby-harbor-storm-closure",
+      "note": "Same closure reported independently by another Source with similar vocabulary."
+    },
+    {
+      "id": "harbor-storm-03",
+      "source_slug": "meridian-daily",
+      "title": "Fishing fleet stranded as gale wrecks waterfront",
+      "body": "Dozens of trawlers sat idle in Elsby on Monday, their crews unable to sail after a night of violent wind tore through the town's waterfront. Port officials have barred all traffic while repairs are assessed.",
+      "language": "en",
+      "published_offset_minutes": 95,
+      "expected_event": "elsby-harbor-storm-closure",
+      "note": "Same closure told from the fishing crews' perspective with almost no shared wording.",
+      "rationale": "Different headline vocabulary (fleet, waterfront, port officials) but the same place, day and cause: the harbor closure after the storm. A matcher that splits this from harbor-storm-01 is a false split."
+    },
+    {
+      "id": "harbor-storm-04",
+      "source_slug": "elsby-courier",
+      "title": "Elsby harbor to reopen partially next week",
+      "body": "Two days after storm damage closed the harbor, the Elsby Harbor Authority said the eastern berths will reopen next week. Oren Vasko said the damaged piers need a month of repairs.",
+      "language": "en",
+      "published_offset_minutes": 2880,
+      "expected_event": "elsby-harbor-storm-closure",
+      "note": "Follow-up on the same closure two days later.",
+      "rationale": "Later reporting on the consequences of the same closure, not a new event: it must join the original Story."
+    },
+    {
+      "id": "harbor-second-storm-01",
+      "source_slug": "elsby-courier",
+      "title": "Storm closes Elsby harbor again",
+      "body": "The Elsby Harbor Authority closed the harbor on Thursday as a new storm battered the coast. Harbor master Oren Vasko said the repaired piers held but ferries are suspended until winds ease.",
+      "language": "en",
+      "published_offset_minutes": 216000,
+      "expected_event": "elsby-harbor-second-storm",
+      "note": "A second storm and closure about five months after the first.",
+      "rationale": "Same place, same authority, same person and nearly the same vocabulary as harbor-storm-01, but a separate storm five months later. Only time separates it; merging it into the earlier Story is a false merge."
+    },
+    {
+      "id": "harbor-second-storm-02",
+      "source_slug": "kestrel-post",
+      "title": "Ferries halted as Elsby harbor shuts in new storm",
+      "body": "Ferry crossings from Elsby were cancelled on Thursday after the harbor closed during a fresh storm. Officials said the piers rebuilt earlier this year were undamaged.",
+      "language": "en",
+      "published_offset_minutes": 216060,
+      "expected_event": "elsby-harbor-second-storm",
+      "note": "Second Source on the later storm closure.",
+      "rationale": "Belongs with harbor-second-storm-01, not with the earlier closure it resembles."
+    },
+    {
+      "id": "rail-strike-01",
+      "source_slug": "northwind-wire",
+      "title": "Brightline rail workers begin 48-hour strike",
+      "body": "Train drivers at Brightline Transit walked out at dawn on Monday in a dispute over rest periods, halting services across the Varrow region. The drivers' union said the strike will last 48 hours.",
+      "language": "en",
+      "published_offset_minutes": 300,
+      "expected_event": "brightline-rail-strike",
+      "note": "Wire-service original of the strike report."
+    },
+    {
+      "id": "rail-strike-02",
+      "source_slug": "varrow-herald",
+      "title": "Brightline rail workers begin 48-hour strike",
+      "body": "Train drivers at Brightline Transit walked out at dawn on Monday in a dispute over rest periods, halting services across the Varrow region. The drivers' union said the strike will last 48 hours.",
+      "language": "en",
+      "published_offset_minutes": 330,
+      "expected_event": "brightline-rail-strike",
+      "note": "Syndicated copy of rail-strike-01 published by another Source.",
+      "rationale": "Identical text, so News Core links it with duplicate_of. That link is deduplication, not event identity: the event also includes rail-strike-03, which is not a duplicate of anything.",
+      "syndicated_from": "rail-strike-01"
+    },
+    {
+      "id": "rail-strike-03",
+      "source_slug": "kestrel-post",
+      "title": "Commuters stranded as Brightline drivers walk out",
+      "body": "Varrow commuters faced empty platforms on Monday morning as Brightline Transit drivers began a two-day stoppage over rest breaks. The company said it hoped to resume talks on Wednesday.",
+      "language": "en",
+      "published_offset_minutes": 420,
+      "expected_event": "brightline-rail-strike",
+      "note": "Independent report on the same strike.",
+      "rationale": "Shares the event with the syndicated pair but not their fingerprint: the Story must hold all three."
+    },
+    {
+      "id": "varrow-budget-01",
+      "source_slug": "varrow-herald",
+      "title": "Varrow council approves 2026 budget",
+      "body": "Varrow City Council approved the 2026 municipal budget on Monday by seven votes to two. Mayor Idris Calloway said the plan funds new street lighting and road repairs.",
+      "language": "en",
+      "published_offset_minutes": 600,
+      "expected_event": "varrow-council-budget-vote",
+      "note": "Varrow's budget vote."
+    },
+    {
+      "id": "varrow-budget-02",
+      "source_slug": "meridian-daily",
+      "title": "Street lighting wins funding in Varrow spending plan",
+      "body": "Councillors in Varrow backed next year's spending plan on Monday, setting aside money for street lighting and resurfacing. Two members voted against it.",
+      "language": "en",
+      "published_offset_minutes": 660,
+      "expected_event": "varrow-council-budget-vote",
+      "note": "Same Varrow budget vote from another Source."
+    },
+    {
+      "id": "lowmere-budget-01",
+      "source_slug": "lowland-review",
+      "title": "Lowmere council approves 2026 budget",
+      "body": "Lowmere Town Council approved its 2026 municipal budget on Monday by five votes to four. Council leader Priya Ostrander said the plan protects library opening hours.",
+      "language": "en",
+      "published_offset_minutes": 720,
+      "expected_event": "lowmere-council-budget-vote",
+      "note": "Lowmere's budget vote on the same day.",
+      "rationale": "Same topic, same day and a near-identical headline to varrow-budget-01, but a different council and a different decision. Topic similarity is not event identity."
+    },
+    {
+      "id": "lowmere-budget-02",
+      "source_slug": "lowland-review",
+      "title": "Libraries spared in narrow Lowmere budget vote",
+      "body": "Lowmere's library hours will not be cut after the town council passed its budget on Monday by a single vote.",
+      "language": "en",
+      "published_offset_minutes": 800,
+      "expected_event": "lowmere-council-budget-vote",
+      "note": "Follow-up detail on Lowmere's budget vote.",
+      "rationale": "Joins lowmere-budget-01, never the Varrow budget Story."
+    },
+    {
+      "id": "calloway-reelection-01",
+      "source_slug": "varrow-herald",
+      "title": "Mayor Calloway to seek second term",
+      "body": "Varrow Mayor Idris Calloway announced on Thursday that he will stand for reelection next year. Speaking at City Hall, he cited the council's recent budget as evidence of his record.",
+      "language": "en",
+      "published_offset_minutes": 4320,
+      "expected_event": "calloway-reelection-bid",
+      "note": "Calloway's reelection announcement.",
+      "rationale": "Names the same mayor, council and even the budget, but announcing a candidacy is a different event from the budget vote."
+    },
+    {
+      "id": "calloway-reelection-02",
+      "source_slug": "meridian-daily",
+      "title": "Calloway confirms reelection campaign in Varrow",
+      "body": "Idris Calloway will run again for mayor of Varrow, he told supporters on Thursday evening.",
+      "language": "en",
+      "published_offset_minutes": 4400,
+      "expected_event": "calloway-reelection-bid",
+      "note": "Second Source on the reelection announcement."
+    },
+    {
+      "id": "kestrel-quake-01",
+      "source_slug": "northwind-wire",
+      "title": "Magnitude 4.1 earthquake shakes Kestrel Bay, no damage reported",
+      "body": "A magnitude 4.1 earthquake shook the Kestrel Bay area at 09:40 on Monday, the regional seismic office said. No damage or injuries were reported.",
+      "language": "en",
+      "published_offset_minutes": 1000,
+      "expected_event": "kestrel-bay-earthquake",
+      "note": "Templated wire report of the Kestrel Bay earthquake."
+    },
+    {
+      "id": "almen-quake-01",
+      "source_slug": "northwind-wire",
+      "title": "Magnitude 4.3 earthquake shakes Almen Valley, no damage reported",
+      "body": "A magnitude 4.3 earthquake shook the Almen Valley area at 09:55 on Monday, the regional seismic office said. No damage or injuries were reported.",
+      "language": "en",
+      "published_offset_minutes": 1015,
+      "expected_event": "almen-valley-earthquake",
+      "note": "Templated wire report of a separate earthquake fifteen minutes later.",
+      "rationale": "Almost every word matches kestrel-quake-01, but the location, time and magnitude differ: two separate earthquakes. High lexical overlap must not cause a merge."
+    },
+    {
+      "id": "kestrel-quake-02",
+      "source_slug": "kestrel-post",
+      "title": "Residents feel brief tremor across Kestrel Bay",
+      "body": "People across Kestrel Bay felt their windows rattle on Monday morning during a short tremor. The town's fire service said it received no calls about damage.",
+      "language": "en",
+      "published_offset_minutes": 1030,
+      "expected_event": "kestrel-bay-earthquake",
+      "note": "Local report on the Kestrel Bay earthquake.",
+      "rationale": "Shares little wording with kestrel-quake-01 yet is the same earthquake; the templated Almen report shares more words but is not."
+    },
+    {
+      "id": "museum-maps-01",
+      "source_slug": "meridian-daily",
+      "title": "Meridian museum opens medieval map exhibition",
+      "body": "The Meridian City Museum opened an exhibition of hand-drawn medieval maps on Monday. Curator Lena Havrill said forty of the maps have never been shown in public.",
+      "language": "en",
+      "published_offset_minutes": 1500,
+      "expected_event": "meridian-museum-map-exhibition",
+      "note": "Unrelated cultural event."
+    },
+    {
+      "id": "museum-maps-02",
+      "source_slug": "lowland-review",
+      "title": "Rare maps go on show in Meridian",
+      "body": "Forty maps drawn by monks in the fourteenth century are on display at the Meridian City Museum from this week.",
+      "language": "en",
+      "published_offset_minutes": 1600,
+      "expected_event": "meridian-museum-map-exhibition",
+      "note": "Second Source on the exhibition."
+    },
+    {
+      "id": "chess-final-01",
+      "source_slug": "lowland-review",
+      "title": "Teenager wins Lowmere open chess final",
+      "body": "Sixteen-year-old Tomas Reyk won the Lowmere Open chess tournament on Monday, beating the defending champion in the final round.",
+      "language": "en",
+      "published_offset_minutes": 1700,
+      "expected_event": "lowmere-chess-final",
+      "note": "Unrelated single-article event."
+    },
+    {
+      "id": "almen-flood-01",
+      "source_slug": "lowland-review",
+      "title": "Flood warning issued as Almen river rises",
+      "body": "Forecasters issued a flood warning for towns along the Almen river on Thursday after two days of heavy rain.",
+      "language": "en",
+      "published_offset_minutes": 5000,
+      "expected_event": "almen-river-flood",
+      "note": "Start of the long-running flood coverage."
+    },
+    {
+      "id": "almen-flood-02",
+      "source_slug": "meridian-daily",
+      "title": "Hundreds evacuated as Almen bursts its banks",
+      "body": "About four hundred residents of Lower Almen left their homes on Friday after the river overtopped flood barriers. Emergency shelters opened in two schools.",
+      "language": "en",
+      "published_offset_minutes": 6440,
+      "expected_event": "almen-river-flood",
+      "note": "Next day of the same flood."
+    },
+    {
+      "id": "almen-flood-03",
+      "source_slug": "lowland-review",
+      "title": "Almen floodwater recedes, residents begin to return",
+      "body": "Water levels on the Almen fell on Sunday and the first evacuated families returned to Lower Almen to assess the damage.",
+      "language": "en",
+      "published_offset_minutes": 9320,
+      "expected_event": "almen-river-flood",
+      "note": "Later reporting on the same flood.",
+      "rationale": "Three days after the warning but still the same flood: later coverage belongs to the Story."
+    },
+    {
+      "id": "almen-inquiry-01",
+      "source_slug": "meridian-daily",
+      "title": "Government orders inquiry into Almen dam releases",
+      "body": "Minister Selene Artois ordered an independent inquiry on Monday into whether water releases from the Upper Almen dam worsened last week's flooding. The dam operator, Almen Hydro, said it would cooperate.",
+      "language": "en",
+      "published_offset_minutes": 10080,
+      "expected_event": "almen-dam-inquiry",
+      "note": "A distinct decision arising from the flood.",
+      "rationale": "Drift boundary: it mentions the flood and shares its places, but the event is a new government decision with its own actors and timeline. Absorbing it into the flood Story is a false merge."
+    },
+    {
+      "id": "almen-inquiry-02",
+      "source_slug": "lowland-review",
+      "title": "Almen Hydro faces inquiry over flood",
+      "body": "An independent panel will examine Almen Hydro's decisions during the recent flood, Minister Selene Artois announced on Monday.",
+      "language": "en",
+      "published_offset_minutes": 10200,
+      "expected_event": "almen-dam-inquiry",
+      "note": "Second Source on the inquiry.",
+      "rationale": "Groups with almen-inquiry-01, not with the flood coverage it refers to."
+    }
+  ]
+}
