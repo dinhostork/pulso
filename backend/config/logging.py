@@ -79,6 +79,10 @@ SAFE_FIELDS = (
     "story_id",
     "pipeline_key",
     "attempts",
+    # Story enrichment (#30): counts and extractor identity only.
+    "topic_count",
+    "entity_count",
+    "model_key",
     # Retention.
     "deleted",
     "retention_days",

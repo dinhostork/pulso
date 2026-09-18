@@ -104,3 +104,86 @@ class EmbeddingProvider(Protocol):
     def identity(self) -> EmbeddingModel: ...
 
     def embed(self, texts: Sequence[str]) -> tuple[Vector, ...]: ...
+
+
+# --- Story enrichment (#30) ---------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ExtractorModel:
+    """Identity of a Topic/Entity extractor; stored on every row as `model_key`."""
+
+    provider: str
+    model: str
+    revision: str
+
+    def __post_init__(self):
+        for name in ("provider", "model", "revision"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value or value != value.strip():
+                raise ValueError(f"Extractor {name} must be nonempty")
+
+    @property
+    def model_key(self) -> str:
+        return f"{self.provider}:{self.model}@{self.revision}"
+
+
+@dataclass(frozen=True)
+class ArticleText:
+    """One member Article's bounded, normalized text."""
+
+    article_id: int
+    text: str
+
+
+@dataclass(frozen=True)
+class StoryText:
+    """The bounded text view of a Story's current members, in a stable order."""
+
+    story_id: int
+    articles: tuple[ArticleText, ...]
+
+
+@dataclass(frozen=True)
+class ExtractedTopic:
+    label: str
+    score: float
+
+
+@dataclass(frozen=True)
+class ExtractedEntity:
+    kind: str  # PERSON, ORGANIZATION, PLACE or OTHER
+    name: str
+    score: float
+
+
+@runtime_checkable
+class TopicExtractor(Protocol):
+    @property
+    def identity(self) -> ExtractorModel: ...
+
+    def extract_topics(self, story: StoryText) -> tuple[ExtractedTopic, ...]: ...
+
+
+@runtime_checkable
+class EntityExtractor(Protocol):
+    @property
+    def identity(self) -> ExtractorModel: ...
+
+    def extract_entities(self, story: StoryText) -> tuple[ExtractedEntity, ...]: ...
+
+
+class EnrichmentErrorKind(StrEnum):
+    NO_MEMBERS = "NO_MEMBERS"
+    EXTRACTOR_FAILED = "EXTRACTOR_FAILED"
+    INVALID_OUTPUT = "INVALID_OUTPUT"
+
+
+class EnrichmentError(Exception):
+    """Safe extraction failure: kind, bounded message, model key; never text."""
+
+    def __init__(self, kind: EnrichmentErrorKind, message: str, *, model_key: str = ""):
+        self.kind = kind
+        self.message = " ".join(message.split())[:200]
+        self.model_key = model_key
+        super().__init__(self.message)

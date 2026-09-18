@@ -642,6 +642,43 @@ The opt-in `celery_smoke` run includes
 matches an Article over Redis. It uses the same worker command as the News
 smoke check below.
 
+## Story Topics and Entities
+
+`news.application.story_enrichment.extract_story_enrichment(story_id)`
+describes a Story with reusable `Topic` and `Entity` rows (issue #30). It
+returns an `EnrichmentSummary` (counts and `model_key`s). Nothing dispatches
+it yet; the Story refresh lifecycle will decide when it runs.
+
+Extracted data is **derived**. An `Entity` is a machine reading of source
+text, not an independent fact (ADR-0004). `Topic` (`slug`, `label`) and
+`Entity` (`kind`, `normalized_key`, `display_name`) carry no description,
+claim, truth flag, external identifier or Source. The per-Story links
+`StoryTopic`/`StoryEntity` are disposable and carry a `score` (0–1), the
+extractor's `model_key` and `generated_at`.
+
+- **Input:** only the Story's current members (`StoryArticle` → `Article`), in
+  publication order. At most `NEWS_STORY_ENRICHMENT_MAX_ARTICLES` (20)
+  Articles are read, and at most `NEWS_STORY_ENRICHMENT_MAX_CHARS_PER_ARTICLE`
+  (4000) characters each. No other Story or external source is consulted.
+- **Output bounds:** `NEWS_STORY_MAX_TOPICS` (8) and
+  `NEWS_STORY_MAX_ENTITIES` (20).
+- **Normalization** (`news/domain/enrichment.py`): casefolding, punctuation and
+  whitespace collapse, and an ASCII slug. "Central Bank", "central bank" and
+  "Central  Bank" become one Entity. This is not entity resolution: "IBM" and
+  "International Business Machines" stay separate.
+- **Extractor:** the default `rules:capitalized-phrases-keywords@1`
+  (`news/adapters/rule_based_enrichment.py`) is deterministic and offline.
+  Entities are capitalized phrases, classified by titles and organization or
+  place words; Topics are the content words most member Articles share.
+  Scores are the share of members that mention the item. Other extractors plug
+  into the `TopicExtractor`/`EntityExtractor` protocols. None is installed by
+  default, and there is no optional dependency group for enrichment.
+- **Replacement:** extraction runs and is validated before any transaction.
+  One short transaction then replaces the Story's Topic and Entity links, so a
+  failing extractor leaves the previous set untouched. Failures raise
+  `EnrichmentError` (`NO_MEMBERS`, `EXTRACTOR_FAILED`, `INVALID_OUTPUT`) and
+  log one warning with identifiers only, never Article text.
+
 ## Local Compose stack
 
 Prerequisites: Docker Engine with BuildKit and Docker Compose v2.20 or newer

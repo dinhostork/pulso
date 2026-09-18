@@ -525,3 +525,90 @@ class ArticleStoryProcessing(models.Model):
                 name="news_storyproc_matched_has_keys",
             ),
         ]
+
+
+class Topic(models.Model):
+    """Reusable Topic vocabulary, keyed by a normalized slug (#30).
+
+    A label, not a fact: it carries no description, claim or truth flag and
+    no Source, so an extracted Topic can never be presented as a source.
+    """
+
+    slug = models.SlugField(max_length=100, unique=True)
+    label = models.CharField(max_length=100)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class Entity(models.Model):
+    """A named thing mentioned in source text, keyed by kind and normalized name.
+
+    A derived observation, not an independent assertion about the world
+    (ADR-0004): no description, claim, truth flag, external identifier or
+    Source. Normalization merges trivial variants only; there is no entity
+    resolution.
+    """
+
+    class Kind(models.TextChoices):
+        PERSON = "PERSON", "Person"
+        ORGANIZATION = "ORGANIZATION", "Organization"
+        PLACE = "PLACE", "Place"
+        OTHER = "OTHER", "Other"
+
+    kind = models.CharField(max_length=16, choices=Kind.choices)
+    normalized_key = models.CharField(max_length=200)
+    display_name = models.CharField(max_length=200)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["kind", "normalized_key"], name="news_entity_kind_key_unique"
+            ),
+        ]
+
+
+def _enrichment_constraints(prefix):
+    return [
+        models.CheckConstraint(condition=~Q(model_key=""), name=f"{prefix}_model_key_nonempty"),
+        models.CheckConstraint(
+            condition=Q(score__gte=0) & Q(score__lte=1), name=f"{prefix}_score_range"
+        ),
+    ]
+
+
+class StoryTopic(models.Model):
+    """Derived, disposable link from a Story to a Topic, stamped with its extractor."""
+
+    # The unique (story, topic) index leads with `story`.
+    story = models.ForeignKey(
+        Story, on_delete=models.CASCADE, related_name="story_topics", db_index=False
+    )
+    topic = models.ForeignKey(Topic, on_delete=models.PROTECT, related_name="story_topics")
+    score = models.FloatField()
+    model_key = models.CharField(max_length=MAX_MODEL_KEY_LENGTH)
+    generated_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["story", "topic"], name="news_storytopic_unique"),
+            *_enrichment_constraints("news_storytopic"),
+        ]
+
+
+class StoryEntity(models.Model):
+    """Derived, disposable link from a Story to an Entity, stamped with its extractor."""
+
+    # The unique (story, entity) index leads with `story`.
+    story = models.ForeignKey(
+        Story, on_delete=models.CASCADE, related_name="story_entities", db_index=False
+    )
+    entity = models.ForeignKey(Entity, on_delete=models.PROTECT, related_name="story_entities")
+    score = models.FloatField()
+    model_key = models.CharField(max_length=MAX_MODEL_KEY_LENGTH)
+    generated_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["story", "entity"], name="news_storyentity_unique"),
+            *_enrichment_constraints("news_storyentity"),
+        ]

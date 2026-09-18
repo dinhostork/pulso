@@ -163,6 +163,14 @@ NEWS_STORY_RECONCILE_AFTER_SECONDS = 600
 NEWS_STORY_RECONCILE_INTERVAL_SECONDS = 900
 NEWS_STORY_PROCESSING_MAX_ATTEMPTS = 6
 
+# Story Topic/Entity extraction (#30): fixed bounds on the input read from a
+# Story's members and on the output kept. Members are read in publication
+# order; each contributes at most MAX_CHARS characters of text.
+NEWS_STORY_ENRICHMENT_MAX_ARTICLES = 20
+NEWS_STORY_ENRICHMENT_MAX_CHARS_PER_ARTICLE = 4000
+NEWS_STORY_MAX_TOPICS = 8
+NEWS_STORY_MAX_ENTITIES = 20
+
 # One RUNNING ingestion run younger than this is assumed to be in flight: the
 # poll dispatcher skips its endpoint (#19) and `news_runs --stale` does not
 # report it (#20). One fixed operational constant, shared so the two views can
