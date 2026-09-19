@@ -49,7 +49,10 @@ the use cases; `domain/stories.py`, `story_matching.py`, `event_anchors.py`,
 the local and deterministic embedding providers, the rule-based extractor and
 the extractive synthesizer. See the [Story Engine architecture](story-engine.md).
 The route registry is the integration point for future HTTP adapters; it must
-not accumulate domain rules. No Story HTTP API exists yet.
+not accumulate domain rules. No Story HTTP API exists yet. Phase 3 issue #41
+adds user-independent product read DTOs and selectors in
+`news.application.story_read`, plus signed keyset cursor primitives in
+`news.application.story_cursors`; HTTP/viewer decoration remains outside News.
 
 ## Dependency direction
 

@@ -327,7 +327,13 @@ class Story(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        indexes = [models.Index(fields=["status"], name="news_story_status_idx")]
+        indexes = [
+            models.Index(fields=["status"], name="news_story_status_idx"),
+            models.Index(
+                fields=["status", "-created_at", "-id"],
+                name="news_story_feed_order_idx",
+            ),
+        ]
 
 
 EVIDENCE_MAX_BYTES = 4096

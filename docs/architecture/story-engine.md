@@ -37,8 +37,12 @@ There is no HTTP surface for Stories: the operator surface is `manage.py`. There
 
 Phase 3's planned product read boundary, freshness matrix, DTOs and ownership
 are specified separately in the [Mobile Feed architecture](mobile-feed.md).
-Issue #40 records that contract without changing this currently implemented
-Story Engine behavior; issue #41 owns the News read services.
+Issue #40 recorded that contract without changing Story Engine behavior. Issue
+#41 now provides the News read services and selected short PostgreSQL
+`REPEATABLE READ, READ ONLY` snapshots because mutable Story headers,
+enrichment, memberships, Articles and Sources cannot all be recovered from a
+synthesis ID alone. The [Mobile Feed architecture](mobile-feed.md#implemented-read-coherence-41)
+records the field-by-field evidence and transaction ownership.
 
 ## Domain vocabulary
 

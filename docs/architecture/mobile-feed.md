@@ -4,10 +4,10 @@
 
 This document is the executable contract for Phase 3 (Mobile Feed). Sections
 marked **contract** describe behavior owned by issues #40–#52; they are not a
-claim that the behavior is already implemented. At the completion of issue #40,
-the existing implementation still consists of the News/Story persistence and
-operator services, JWT backend endpoints, and the Expo shell. There are no
-product Story endpoints, Reading models, or mobile API client yet.
+claim that every behavior is already implemented. Issue #41 now implements the
+News-owned factual read DTOs/selectors and cursor primitives. Product HTTP
+endpoints, Reading models, viewer decoration, and the mobile API client remain
+owned by later issues.
 
 Phase 3 delivers authenticated factual Story reading, source navigation,
 bookmarks, and qualified feed-exposure reporting. Opinion, Position,
@@ -137,6 +137,30 @@ matching the Story signature, a valid cited TITLE, bounded ordered elements,
 and only same-signature Topic/Entity enrichment. Legacy unstamped enrichment
 is omitted. `updated_at` is never presented as publication recency.
 
+### Implemented read coherence (#41)
+
+Generation anchoring alone is insufficient under the current schema:
+
+| Response data | Generation-stable? | Evidence/consequence |
+| --- | --- | --- |
+| `StorySynthesis`, elements and citation links | Yes, retained per synthesis ID | These rows can anchor synthesis text and Article IDs |
+| Story header/counters/status | No | The single Story row is updated during later refreshes |
+| Topics and Entities | No | Associations are replaced in place; there is no generation history |
+| Current membership | No | StoryArticle rows are reassigned/removed independently of old synthesis |
+| Article title/URL/byline/revision | No | Article is revised in place; citation stores only its Article ID |
+| Source name/active flag | No | Source rows are mutable; inactivity must not erase attribution |
+
+Therefore #41 uses the approved fallback: each public factual read owns a
+short PostgreSQL `REPEATABLE READ, READ ONLY` transaction, sets isolation
+before its first ORM query, materializes all DTO data inside it, and returns
+only after the transaction closes. Nested/caller-owned transactions are
+rejected. The transaction performs no provider work, dispatch, writes, row
+locks, JSON encoding, or network work. A separate-connection concurrency test
+commits a complete refresh—including replaced synthesis/enrichment, mutable
+Article/Source data and changed membership—while a read is paused between
+queries; the reader receives the complete earlier snapshot and the writer is
+not blocked.
+
 ## HTTP contract
 
 All product endpoints require the existing bearer authentication and use no
@@ -174,6 +198,14 @@ Story, current membership signature, and optional synthesis context. Context
 change returns 409 `source_context_changed` so the client restarts once rather
 than appending mixed pages. Cursor signatures provide integrity, not
 authorization.
+
+The #41 implementation uses `news.application.story_cursors` for the fixed
+signed payload and `news.application.story_read` for feed/detail/source reads.
+The feed's `(status, created_at DESC, id DESC)` index is backed by an EXPLAIN
+test over 1,000 representative Story rows. Factual feed reads execute the same
+bounded query count for pages of 1 and 50: 8 SQL statements including
+transaction statements. The measured detail/source reads use 11/5 statements,
+with enforced fixed budgets of 12/8.
 
 ## Bookmarks
 
