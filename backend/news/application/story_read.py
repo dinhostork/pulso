@@ -38,6 +38,7 @@ MAX_PAGE_SIZE = 50
 MAX_PUBLICATION_TITLE_CHARS = 500
 MAX_BYLINE_CHARS = 512
 FEED_SCOPE = "news.feed.created-desc.v1"
+MAX_STORY_BATCH = 50
 logger = logging.getLogger("pulso.news.stories")
 
 
@@ -341,6 +342,79 @@ def _card(
         article_count=story.article_count,
         source_count=story.source_count,
     )
+
+
+def _saved_card(
+    story: Story,
+    synthesis: StorySynthesis | None,
+    topic_rows: list[StoryTopic],
+) -> StoryCardDTO:
+    """Build the factual card used when Reading composes a Saved page."""
+
+    elements = _valid_generation(story, synthesis)
+    if elements is None:
+        return StoryCardDTO(
+            id=str(story.pk),
+            language=story.language,
+            created_at=story.created_at,
+            first_published_at=story.first_published_at,
+            last_published_at=story.last_published_at,
+            content_state="PREPARING",
+            synthesis_id=None,
+            synthesized_at=None,
+            title="Story being prepared",
+            elements=(),
+            topics=(),
+            article_count=0,
+            source_count=0,
+        )
+    return StoryCardDTO(
+        id=str(story.pk),
+        language=story.language,
+        created_at=story.created_at,
+        first_published_at=story.first_published_at,
+        last_published_at=story.last_published_at,
+        content_state=(
+            "CURRENT" if story.refresh_state == Story.RefreshState.CURRENT else "UPDATING"
+        ),
+        synthesis_id=str(synthesis.pk),
+        synthesized_at=synthesis.generated_at,
+        title=next(element.text for element in elements if element.kind == "TITLE"),
+        elements=elements,
+        topics=_topics(topic_rows, synthesis.member_signature),
+        article_count=story.article_count,
+        source_count=story.source_count,
+    )
+
+
+def story_cards(story_ids: list[int] | tuple[int, ...]) -> dict[int, StoryCardDTO]:
+    """Materialize up to one page of available Story cards in one factual snapshot."""
+
+    if len(story_ids) > MAX_STORY_BATCH:
+        raise ValueError(f"story_ids cannot contain more than {MAX_STORY_BATCH} items")
+    ids = list(dict.fromkeys(_positive_id(value, "story_id") for value in story_ids))
+    if not ids:
+        return {}
+    live_member = StoryArticle.objects.filter(story_id=OuterRef("pk"))
+    with _factual_snapshot():
+        stories = list(
+            Story.objects.filter(pk__in=ids, status=Story.Status.ACTIVE)
+            .annotate(has_live_member=Exists(live_member))
+            .filter(has_live_member=True)
+            .order_by("pk")
+        )
+        _snapshot_checkpoint()
+        available_ids = [story.pk for story in stories]
+        syntheses = _prefetched_syntheses(available_ids)
+        topics = _topic_map(available_ids)
+        return {
+            story.pk: _saved_card(
+                story,
+                syntheses.get(story.pk),
+                topics.get(story.pk, []),
+            )
+            for story in stories
+        }
 
 
 def feed_candidates(

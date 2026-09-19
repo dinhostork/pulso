@@ -38,6 +38,8 @@ SAFE_FIELDS = (
     "truncated",
     "state",
     "outcome",
+    "operation",
+    "count",
     "rejection_reason",
     "article_id",
     # Run result.

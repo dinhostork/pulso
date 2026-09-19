@@ -14,6 +14,7 @@ INSTALLED_APPS = [
     "database.apps.DatabaseConfig",
     "diagnostics.apps.DiagnosticsConfig",
     "news.apps.NewsConfig",
+    "reading.apps.ReadingConfig",
 ]
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
