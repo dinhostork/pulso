@@ -18,7 +18,7 @@ from django.db.models.functions import Coalesce
 
 from news.application.story_processing import failed_step, is_fresh
 from news.application.story_synthesis import ordered_elements
-from news.domain.story_matching import MatchKind, MatchReason
+from news.domain.story_matching import MatchKind, MatchReason, MatchRule
 from news.models import (
     ArticleEmbedding,
     ArticleStoryProcessing,
@@ -266,6 +266,18 @@ class RecordedCandidate:
 
 
 @dataclass(frozen=True)
+class RecordedVerification:
+    """One secondary-rule check as recorded at decision time (#36)."""
+
+    story_id: int
+    distance: float
+    result: str
+    member_distance: float | None
+    members_checked: int
+    shared_anchors: int
+
+
+@dataclass(frozen=True)
 class Explanation:
     article_id: int
     processing: ArticleStoryProcessing | None
@@ -276,10 +288,13 @@ class Explanation:
     story_status: str
     decision: str
     reason: str
+    rule: str
     distance: float | None
     candidate_count: int | None
     candidates: tuple[RecordedCandidate, ...]
     threshold: float | None
+    secondary_threshold: float | None
+    verifications: tuple[RecordedVerification, ...]
     max_time_gap_hours: float | None
     embedding_model_key: str
     summary: str
@@ -296,17 +311,52 @@ def _number(value: float | None) -> str:
     return "-" if value is None else f"{value:.6f}"
 
 
-def _summary(
-    decision: str,
-    reason: str,
-    story_id: int,
-    distance: float | None,
-    count: int | None,
-    candidates,
-    threshold: float | None,
-    gap: float | None,
-) -> str:
-    nearest = candidates[0] if candidates else None
+def _optional_float(value) -> float | None:
+    return float(value) if isinstance(value, int | float) else None
+
+
+def _verifications(evidence: dict) -> tuple[RecordedVerification, ...]:
+    return tuple(
+        RecordedVerification(
+            story_id=int(item["story_id"]),
+            distance=float(item["distance"]),
+            result=str(item.get("result", "")),
+            member_distance=_optional_float(item.get("member_distance")),
+            members_checked=int(item.get("members_checked") or 0),
+            shared_anchors=int(item.get("shared_anchors") or 0),
+        )
+        for item in evidence.get("verification", ())
+        if isinstance(item, dict) and "story_id" in item and "distance" in item
+    )
+
+
+def _rejections(verifications) -> str:
+    return "; ".join(
+        f"Story {check.story_id} at {_number(check.distance)}: {check.result} "
+        f"(nearest member {_number(check.member_distance)}, "
+        f"{check.shared_anchors} shared name(s))"
+        for check in verifications
+    )
+
+
+def _summary(explanation: dict, story_id: int) -> str:
+    decision, reason = explanation["decision"], explanation["reason"]
+    distance, threshold = explanation["distance"], explanation["threshold"]
+    secondary = explanation["secondary_threshold"]
+    candidates, verifications = explanation["candidates"], explanation["verifications"]
+    if decision == MatchKind.MATCH and reason == MatchReason.VERIFIED_SAME_EVENT:
+        accepted = next((c for c in verifications if c.story_id == story_id), None)
+        detail = (
+            f"; nearest member at {_number(accepted.member_distance)}, "
+            f"{accepted.shared_anchors} shared name(s)"
+            if accepted
+            else ""
+        )
+        return (
+            f"joined Story {story_id} by the secondary event verifier: distance "
+            f"{_number(distance)} is above the primary threshold {threshold} and within the "
+            f"secondary bound {secondary}{detail}"
+        )
     if decision == MatchKind.MATCH:
         return (
             f"joined Story {story_id}: the nearest compatible candidate was at distance "
@@ -319,15 +369,24 @@ def _summary(
         )
     if reason == MatchReason.NO_COMPATIBLE_CANDIDATE:
         return (
-            f"created a new Story: {count} candidate(s) were retrieved but none was compatible "
-            f"(ACTIVE, same language, latest member within {gap} h)"
+            f"created a new Story: {explanation['candidate_count']} candidate(s) were retrieved "
+            f"but none was compatible (ACTIVE, same language, within "
+            f"{explanation['max_time_gap_hours']} h of its members)"
+        )
+    if reason == MatchReason.VERIFICATION_REJECTED:
+        return (
+            f"created a new Story: no candidate was within the threshold {threshold}, and the "
+            f"secondary event verifier rejected every candidate within {secondary}: "
+            + _rejections(verifications)
         )
     if reason == MatchReason.ABOVE_THRESHOLD:
+        nearest = candidates[0] if candidates else None
         nearest_text = f" (Story {nearest.story_id})" if nearest else ""
+        bound = f" and the secondary bound {secondary}" if secondary is not None else ""
         return (
             f"created a new Story: no candidate qualified; the nearest compatible "
             f"candidate{nearest_text} was at distance {_number(distance)}, above the threshold "
-            f"{threshold}"
+            f"{threshold}{bound}"
         )
     return f"decision {decision or '-'} with reason {reason or '-'}"
 
@@ -357,10 +416,22 @@ def explain_article(article_id: int) -> Explanation:
         for item in evidence.get("candidates", ())
         if isinstance(item, dict) and "story_id" in item and "distance" in item
     )
-    distance = evidence.get("distance")
-    threshold = evidence.get("max_distance")
-    gap = evidence.get("max_time_gap_hours")
     count = evidence.get("candidate_count")
+    # Revision 1 (#28) recorded no rule: its only match rule was the primary one.
+    rule = str(evidence.get("rule") or "")
+    if not rule and decision == MatchKind.MATCH and reason == MatchReason.WITHIN_THRESHOLD:
+        rule = str(MatchRule.PRIMARY_DISTANCE)
+    recorded = {
+        "decision": decision,
+        "reason": reason,
+        "distance": _optional_float(evidence.get("distance")),
+        "threshold": _optional_float(evidence.get("max_distance")),
+        "secondary_threshold": _optional_float(evidence.get("secondary_max_distance")),
+        "max_time_gap_hours": _optional_float(evidence.get("max_time_gap_hours")),
+        "candidate_count": int(count) if isinstance(count, int) else None,
+        "candidates": candidates,
+        "verifications": _verifications(evidence),
+    }
     if association is None:
         summary = (
             "never attempted: no processing record and no Story association"
@@ -368,9 +439,7 @@ def explain_article(article_id: int) -> Explanation:
             else "no Story association"
         )
     else:
-        summary = _summary(
-            decision, reason, association.story_id, distance, count, candidates, threshold, gap
-        )
+        summary = _summary(recorded, association.story_id)
     return Explanation(
         article_id=article_id,
         processing=processing,
@@ -380,13 +449,8 @@ def explain_article(article_id: int) -> Explanation:
         and processing.attempts >= settings.NEWS_STORY_PROCESSING_MAX_ATTEMPTS,
         association=association,
         story_status=association.story.status if association else "",
-        decision=decision,
-        reason=reason,
-        distance=float(distance) if isinstance(distance, int | float) else None,
-        candidate_count=int(count) if isinstance(count, int) else None,
-        candidates=candidates,
-        threshold=float(threshold) if isinstance(threshold, int | float) else None,
-        max_time_gap_hours=float(gap) if isinstance(gap, int | float) else None,
+        rule=rule,
         embedding_model_key=str(evidence.get("embedding_model_key", "")),
         summary=summary,
+        **recorded,
     )

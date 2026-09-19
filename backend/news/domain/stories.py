@@ -3,7 +3,7 @@
 import hashlib
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 # Mirrors `news.models.Story.Status` without importing the ORM.
 STORY_ACTIVE = "ACTIVE"
@@ -22,9 +22,10 @@ class StoryCandidate:
 
     `distance` is the pgvector cosine distance between the Article's and the
     Story's embeddings under one `model_key` (0 identical, 2 opposite).
-    `last_article_published_at` is the latest member Article's publication
-    time (`first_seen_at` when a member has no `published_at`), never the
-    Story's creation or ingestion time.
+    `last_article_published_at` and `first_article_published_at` bound the
+    member Articles' publication times (`first_seen_at` when a member has no
+    `published_at`), never the Story's creation or ingestion time. A missing
+    first time means the range is the latest member's time alone.
     """
 
     story_id: int
@@ -33,6 +34,17 @@ class StoryCandidate:
     last_article_published_at: datetime
     language: str
     status: str = STORY_ACTIVE
+    first_article_published_at: datetime | None = None
+
+    def time_gap(self, event_time: datetime) -> timedelta:
+        """Distance from `event_time` to the member time range; zero inside it."""
+
+        first = self.first_article_published_at or self.last_article_published_at
+        if event_time < first:
+            return first - event_time
+        if event_time > self.last_article_published_at:
+            return event_time - self.last_article_published_at
+        return timedelta(0)
 
 
 def member_signature(members: Iterable[tuple[int, datetime]]) -> str:

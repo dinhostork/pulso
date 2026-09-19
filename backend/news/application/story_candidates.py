@@ -47,7 +47,8 @@ SELECT
     candidate.member_count,
     candidate.last_time,
     candidate.language,
-    candidate.status
+    candidate.status,
+    candidate.first_time
 FROM target
 LEFT JOIN LATERAL (
     SELECT
@@ -55,6 +56,7 @@ LEFT JOIN LATERAL (
         story_embedding.vector <=> target.vector AS distance,
         members.member_count,
         members.last_time,
+        members.first_time,
         story.language,
         story.status
     FROM news_storyembedding AS story_embedding
@@ -130,7 +132,8 @@ def find_candidates(
             last_article_published_at=last_time,
             language=language,
             status=status,
+            first_article_published_at=first_time,
         )
-        for story_id, distance, member_count, last_time, language, status in rows
+        for story_id, distance, member_count, last_time, language, status, first_time in rows
         if story_id is not None
     )

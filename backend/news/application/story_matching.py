@@ -1,7 +1,9 @@
-"""Match one embedded Article into a Story, or start a new one (#28).
+"""Match one embedded Article into a Story, or start a new one (#28, #36).
 
 This module only gathers inputs and applies the result: candidates come from
-`find_candidates` (#27) and the rule is `news.domain.story_matching`. One
+`find_candidates` (#27), secondary-rule evidence from
+`news.application.story_verification` (only for the candidates the primary
+rule leaves unresolved) and the rule is `news.domain.story_matching`. One
 invocation writes at most one Story, one StoryArticle and that new Story's
 first StoryEmbedding, all in one transaction, and never touches `Article`,
 `RawArticle`, `IngestionRun`, `Source` or `SourceEndpoint`.
@@ -19,8 +21,10 @@ Two same-event Articles matched at the same moment, with no Story yet, each
 create a Story. v0.3 accepts that duplicate; the two converge only through
 later reprocessing. No lock outside PostgreSQL is used.
 
-`StoryArticle.similarity` is stored as cosine similarity, `1 - distance`, and
-is NULL for `CREATED_STORY`. The raw distance is kept in `evidence`.
+`StoryArticle.similarity` is stored as cosine similarity, `1 - distance`, to
+the chosen Story, whichever rule accepted it, and is NULL for `CREATED_STORY`.
+The raw distance, the rule and every secondary verification are kept in
+`evidence` as identifiers, enums and numbers.
 """
 
 import time
@@ -33,6 +37,7 @@ from django.db import IntegrityError, transaction
 from news.application.embeddings import configured_provider
 from news.application.story_candidates import find_candidates
 from news.application.story_refresh import mark_story_stale
+from news.application.story_verification import gather_evidence
 from news.domain.embeddings import story_vector
 from news.domain.stories import StoryCandidate
 from news.domain.story_matching import (
@@ -41,6 +46,7 @@ from news.domain.story_matching import (
     MatchKind,
     MatchPolicy,
     decide_story_match,
+    secondary_candidates,
 )
 from news.logging import ContextLoggerAdapter, log_step, story_logger
 from news.models import Article, ArticleEmbedding, Story, StoryArticle, StoryEmbedding
@@ -48,6 +54,9 @@ from news.models import Article, ArticleEmbedding, Story, StoryArticle, StoryEmb
 MATCH_POLICY = MatchPolicy(
     max_distance=settings.NEWS_STORY_MATCH_MAX_DISTANCE,
     max_time_gap_hours=settings.NEWS_STORY_MATCH_MAX_TIME_GAP_HOURS,
+    secondary_max_distance=settings.NEWS_STORY_MATCH_SECONDARY_MAX_DISTANCE,
+    min_anchors=1,
+    max_members=settings.NEWS_STORY_MATCH_VERIFY_MAX_MEMBERS,
 )
 # The matching policy in force. #29 compares it, together with the embedding
 # `model_key`, to decide whether an Article's Story assignment is stale.
@@ -100,17 +109,36 @@ def _snapshot(article_id: int) -> ArticleMatchSnapshot:
 def _evidence(
     decision: MatchDecision, candidates: tuple[StoryCandidate, ...], model_key: str
 ) -> dict:
-    """Identifiers and numbers only; bounded by EVIDENCE_CANDIDATES."""
+    """Identifiers, enums and numbers only; bounded by EVIDENCE_CANDIDATES.
+
+    `rule` is the rule that accepted a MATCH (None when a Story was created);
+    `verification` lists the secondary candidates checked, in order, with the
+    decisive values. Anchor terms are publication text and are never stored,
+    only their count.
+    """
 
     return {
         "reason": decision.reason.value,
+        "rule": decision.rule.value if decision.rule else None,
         "distance": decision.distance,
         "candidate_count": len(candidates),
         "candidates": [
             {"story_id": candidate.story_id, "distance": candidate.distance}
             for candidate in candidates[:EVIDENCE_CANDIDATES]
         ],
+        "verification": [
+            {
+                "story_id": check.story_id,
+                "distance": check.distance,
+                "result": check.result.value,
+                "member_distance": check.nearest_member_distance,
+                "members_checked": check.members_checked,
+                "shared_anchors": check.shared_anchors,
+            }
+            for check in decision.verifications[:EVIDENCE_CANDIDATES]
+        ],
         "max_distance": MATCH_POLICY.max_distance,
+        "secondary_max_distance": MATCH_POLICY.secondary_max_distance,
         "max_time_gap_hours": MATCH_POLICY.max_time_gap_hours,
         "embedding_model_key": model_key,
     }
@@ -186,6 +214,7 @@ def _log_decision(log: ContextLoggerAdapter, decision: MatchDecision, started: f
         started,
         decision=str(decision.kind),
         match_reason=str(decision.reason),
+        match_rule=str(decision.rule) if decision.rule else None,
         chosen_story_id=decision.story_id,
         distance=decision.distance,
         threshold=MATCH_POLICY.max_distance,
@@ -221,7 +250,13 @@ def match_article(
         candidates = find_candidates(article_id, model_key)
         log_step(log, "candidate_retrieval", step_started, candidate_count=len(candidates))
         step_started = time.monotonic()
-        decision = decide_story_match(snapshot, candidates, MATCH_POLICY)
+        evidence = gather_evidence(
+            article_id,
+            model_key,
+            secondary_candidates(snapshot, candidates, MATCH_POLICY),
+            MATCH_POLICY,
+        )
+        decision = decide_story_match(snapshot, candidates, MATCH_POLICY, evidence)
         _log_decision(log, decision, step_started)
         try:
             with transaction.atomic():

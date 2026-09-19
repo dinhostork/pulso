@@ -70,8 +70,10 @@ class Command(BaseCommand):
         )
         write(
             f"decision={explanation.decision} reason={explanation.reason or '-'} "
+            f"match_rule={explanation.rule or '-'} "
             f"chosen_story_id={association.story_id if explanation.decision == 'MATCH' else '-'} "
             f"distance={_number(explanation.distance)} threshold={explanation.threshold} "
+            f"secondary_threshold={explanation.secondary_threshold} "
             f"max_time_gap_hours={explanation.max_time_gap_hours} "
             f"candidate_count={explanation.candidate_count}"
         )
@@ -84,5 +86,12 @@ class Command(BaseCommand):
             write(
                 f"  #{rank} story_id={candidate.story_id} distance={candidate.distance:.6f} "
                 f"within_threshold={'yes' if within else 'no'}"
+            )
+        write(f"secondary_verifications={len(explanation.verifications)}")
+        for check in explanation.verifications:
+            write(
+                f"  story_id={check.story_id} distance={check.distance:.6f} "
+                f"result={check.result} member_distance={_number(check.member_distance)} "
+                f"members_checked={check.members_checked} shared_anchors={check.shared_anchors}"
             )
         write(f"explanation: {explanation.summary}")

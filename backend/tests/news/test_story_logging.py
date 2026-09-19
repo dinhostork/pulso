@@ -76,7 +76,7 @@ def format_record(**fields) -> dict:
 def test_every_story_field_and_context_field_is_allowlisted():
     assert set(STORY_FIELDS) <= set(SAFE_FIELDS)
     assert set(STORY_CONTEXT_FIELDS) <= set(SAFE_FIELDS)
-    assert {"step", "failed_step", "match_reason", "matcher_key"} <= set(SAFE_FIELDS)
+    assert {"step", "failed_step", "match_reason", "match_rule", "matcher_key"} <= set(SAFE_FIELDS)
     assert len(SAFE_FIELDS) == len(set(SAFE_FIELDS)), "no field is listed twice"
 
 
@@ -201,6 +201,7 @@ def test_one_articles_story_processing_shares_its_article_id(pulso_json_log):
     decision = records[2]
     story_id = StoryArticle.objects.get(article_id=second.pk).story_id
     assert decision["decision"] == "MATCH" and decision["match_reason"] == "WITHIN_THRESHOLD"
+    assert decision["match_rule"] == "PRIMARY_DISTANCE"
     assert decision["chosen_story_id"] == story_id
     assert decision["threshold"] == 0.18 and decision["candidate_count"] == 1
     assert 0 <= decision["distance"] <= 0.18
@@ -225,6 +226,34 @@ def test_a_new_story_decision_logs_why(pulso_json_log):
     assert decision["match_reason"] == "NO_CANDIDATES"
     assert decision["candidate_count"] == 0
     assert decision["chosen_story_id"] is None and decision["distance"] is None
+    assert decision["match_rule"] is None
+
+
+@pytest.mark.django_db
+def test_the_secondary_decision_path_is_logged_without_content(recorded, pulso_json_log):
+    loaded = load_corpus()
+    process_article(loaded.article_ids["varrow-budget-01"])
+    before = len(pulso_json_log.entries)
+
+    process_article(loaded.article_ids["varrow-budget-02"])
+
+    (decision,) = [
+        entry
+        for entry in pulso_json_log.entries[before:]
+        if entry.get("step") == "matching_decision"
+    ]
+    story_id = StoryArticle.objects.get(article_id=loaded.article_ids["varrow-budget-01"]).story_id
+    assert decision["decision"] == "MATCH"
+    assert decision["match_reason"] == "VERIFIED_SAME_EVENT"
+    assert decision["match_rule"] == "SECONDARY_EVENT_VERIFY"
+    assert decision["chosen_story_id"] == story_id
+    assert 0.18 < decision["distance"] <= 0.25 and decision["threshold"] == 0.18
+    text = pulso_json_log.text().lower()
+    for fixture_id in ("varrow-budget-01", "varrow-budget-02"):
+        article = Article.objects.get(pk=loaded.article_ids[fixture_id])
+        assert article.title.lower() not in text and article.body_text[:40].lower() not in text
+    # The shared name itself is publication text: it is counted, never logged.
+    assert "varrow" not in text
 
 
 @pytest.mark.django_db

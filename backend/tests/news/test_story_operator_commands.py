@@ -132,7 +132,7 @@ def test_explains_a_match_from_the_evidence_recorded_at_decision_time(corpus, mo
     output = run("news_story_explain", "--article", str(corpus.article_ids["harbor-storm-02"]))
 
     decision = line_with(output, "decision=")
-    assert "decision=MATCH reason=WITHIN_THRESHOLD" in decision
+    assert "decision=MATCH reason=WITHIN_THRESHOLD match_rule=PRIMARY_DISTANCE" in decision
     assert f"chosen_story_id={harbor}" in decision
     assert f"distance={association.evidence['distance']:.6f}" in decision
     assert "threshold=0.18" in decision and "candidate_count=1" in decision
@@ -145,6 +145,29 @@ def test_explains_a_match_from_the_evidence_recorded_at_decision_time(corpus, mo
 
 @pytest.mark.django_db
 def test_explains_why_no_candidate_qualified_for_a_new_story(corpus, monkeypatch):
+    process(corpus, "rail-strike-01")
+    strike = story_of(corpus, "rail-strike-01")
+    process(corpus, "varrow-budget-01")
+    forbid_retrieval(monkeypatch)
+
+    output = run("news_story_explain", "--article", str(corpus.article_ids["varrow-budget-01"]))
+
+    decision = line_with(output, "decision=")
+    assert "decision=CREATE_NEW_STORY reason=ABOVE_THRESHOLD match_rule=-" in decision
+    assert "chosen_story_id=-" in decision
+    assert "distance=0.401795" in decision and "threshold=0.18" in decision
+    assert "secondary_threshold=0.25" in decision
+    assert f"  #1 story_id={strike} distance=0.401795 within_threshold=no" in output
+    assert "secondary_verifications=0" in output
+    assert (
+        f"explanation: created a new Story: no candidate qualified; the nearest compatible "
+        f"candidate (Story {strike}) was at distance 0.401795, above the threshold 0.18 and "
+        f"the secondary bound 0.25"
+    ) in output
+
+
+@pytest.mark.django_db
+def test_explains_a_secondary_verified_match(corpus, monkeypatch):
     process(corpus, "varrow-budget-01")
     budget = story_of(corpus, "varrow-budget-01")
     process(corpus, "varrow-budget-02")
@@ -153,14 +176,67 @@ def test_explains_why_no_candidate_qualified_for_a_new_story(corpus, monkeypatch
     output = run("news_story_explain", "--article", str(corpus.article_ids["varrow-budget-02"]))
 
     decision = line_with(output, "decision=")
-    assert "decision=CREATE_NEW_STORY reason=ABOVE_THRESHOLD chosen_story_id=-" in decision
-    assert "distance=0.188946" in decision and "threshold=0.18" in decision
-    assert "candidate_count=" in decision
-    assert f"  #1 story_id={budget} distance=0.188946 within_threshold=no" in output
+    assert "decision=MATCH reason=VERIFIED_SAME_EVENT match_rule=SECONDARY_EVENT_VERIFY" in decision
+    assert f"chosen_story_id={budget} distance=0.188946 threshold=0.18" in decision
+    assert "secondary_verifications=1" in output
     assert (
-        f"explanation: created a new Story: no candidate qualified; the nearest compatible "
-        f"candidate (Story {budget}) was at distance 0.188946, above the threshold 0.18"
+        f"  story_id={budget} distance=0.188946 result=ACCEPTED member_distance=0.188946 "
+        f"members_checked=1 shared_anchors=1"
     ) in output
+    assert (
+        f"explanation: joined Story {budget} by the secondary event verifier: distance "
+        f"0.188946 is above the primary threshold 0.18 and within the secondary bound 0.25; "
+        f"nearest member at 0.188946, 1 shared name(s)"
+    ) in output
+
+
+@pytest.mark.django_db
+def test_explains_why_the_secondary_verifier_rejected_a_lookalike(corpus, monkeypatch):
+    process(corpus, "kestrel-quake-01")
+    quake = story_of(corpus, "kestrel-quake-01")
+    process(corpus, "almen-quake-01")
+    forbid_retrieval(monkeypatch)
+
+    output = run("news_story_explain", "--article", str(corpus.article_ids["almen-quake-01"]))
+
+    assert "decision=CREATE_NEW_STORY reason=VERIFICATION_REJECTED match_rule=-" in output
+    assert f"  story_id={quake} distance=0.191864 result=NO_SHARED_ANCHOR" in output
+    assert "shared_anchors=0" in output
+    assert (
+        f"the secondary event verifier rejected every candidate within 0.25: Story {quake} at "
+        f"0.191864: NO_SHARED_ANCHOR (nearest member 0.191864, 0 shared name(s))"
+    ) in output
+
+
+@pytest.mark.django_db
+def test_explains_revision_one_evidence_as_the_primary_rule(corpus):
+    process(corpus, "harbor-storm-01")
+    story = story_of(corpus, "harbor-storm-01")
+    article_id = corpus.article_ids["harbor-storm-02"]
+    StoryArticle.objects.create(
+        story_id=story,
+        article_id=article_id,
+        is_primary=True,
+        method=StoryArticle.Method.MATCHED,
+        similarity=0.93,
+        matcher_key="story-match-v1;max_distance=0.18;max_time_gap_hours=48.0",
+        # Exactly what revision 1 recorded: no rule, no verification.
+        evidence={
+            "reason": "WITHIN_THRESHOLD",
+            "distance": 0.07,
+            "candidate_count": 1,
+            "candidates": [{"story_id": story, "distance": 0.07}],
+            "max_distance": 0.18,
+            "max_time_gap_hours": 48.0,
+            "embedding_model_key": "fastembed:test",
+        },
+    )
+
+    output = run("news_story_explain", "--article", str(article_id))
+
+    assert "decision=MATCH reason=WITHIN_THRESHOLD match_rule=PRIMARY_DISTANCE" in output
+    assert "secondary_threshold=None" in output and "secondary_verifications=0" in output
+    assert f"explanation: joined Story {story}: the nearest compatible" in output
 
 
 @pytest.mark.django_db
@@ -201,7 +277,7 @@ def test_explains_candidates_that_were_all_incompatible(corpus):
     assert "reason=NO_COMPATIBLE_CANDIDATE" in output
     assert "#1 story_id=901 distance=0.100000" in output
     assert "2 candidate(s) were retrieved but none was compatible" in output
-    assert "latest member within 48.0 h" in output
+    assert "within 48.0 h of its members" in output
 
 
 @pytest.mark.django_db

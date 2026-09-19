@@ -301,7 +301,7 @@ Story processing (#33) adds identifiers, decisions, numbers and states only:
 the context fields `article_id`, `story_id`, `model_key`, `task_id`, `attempt`
 and `trigger`, and the per-step fields `step`, `failed_step`,
 `candidate_count`, `chosen_story_id`, `distance`, `threshold`, `decision`,
-`match_reason`, `matcher_key`, `duration_ms`, `member_count`,
+`match_reason`, `match_rule`, `matcher_key`, `duration_ms`, `member_count`,
 `article_count`, `source_count`, `topic_count`, `entity_count`,
 `synthesis_source_count`, `refresh_state`, `refresh_reason` and `error_kind`.
 Their meaning per step is in [Story observability](#story-observability).
@@ -521,8 +521,8 @@ when Story volume makes the exact scan measurably slow.
 ## Story matching
 
 `news.application.story_matching.match_article(article_id)` places one
-embedded Article in a Story (issue #28). It retrieves candidates (above),
-passes an immutable snapshot and the candidates to the pure rule
+embedded Article in a Story (issues #28, #36). It retrieves candidates
+(above), passes an immutable snapshot and the candidates to the pure rule
 `news.domain.story_matching.decide_story_match`, and persists the result in
 one transaction:
 
@@ -531,38 +531,93 @@ one transaction:
   (`method=CREATED_STORY`) and its first `StoryEmbedding`. One call creates at
   most one Story.
 
-The rule is: the nearest compatible candidate (`ACTIVE`, same language,
-latest member within `NEWS_STORY_MATCH_MAX_TIME_GAP_HOURS`) is joined when its
-cosine distance is at most `NEWS_STORY_MATCH_MAX_DISTANCE`. The **ambiguous
-band** — nearest distance above the threshold but inside the retrieval bound —
-starts a new Story, because v0.3 prefers splitting one event over merging two.
-The decision never sees `content_fingerprint`, `duplicate_of` or Source
-identity.
+A candidate is **compatible** when it is `ACTIVE`, has the same primary
+language subtag, and the Article's event time lies within
+`NEWS_STORY_MATCH_MAX_TIME_GAP_HOURS` of the candidate's member publication
+range (zero inside it). Compatible candidates are ordered by
+(`distance`, Story id), then:
+
+1. **Primary rule** (`match_rule=PRIMARY_DISTANCE`, reason
+   `WITHIN_THRESHOLD`): the nearest compatible candidate is joined when its
+   cosine distance is at most `NEWS_STORY_MATCH_MAX_DISTANCE`. Nothing else is
+   read.
+2. **Secondary event verifier** (`match_rule=SECONDARY_EVENT_VERIFY`, reason
+   `VERIFIED_SAME_EVENT`): otherwise each compatible candidate up to
+   `NEWS_STORY_MATCH_SECONDARY_MAX_DISTANCE` is verified in that order, and the
+   first verified one is joined. Verification requires:
+   - English (`ANCHOR_LANGUAGES`); other languages go straight to rule 3;
+   - one of the candidate's `NEWS_STORY_MATCH_VERIFY_MAX_MEMBERS` most recent
+     members itself within `NEWS_STORY_MATCH_SECONDARY_MAX_DISTANCE` of the
+     Article, so a Story vector cannot pull in a report that no member
+     resembles;
+   - at least one proper name in common. `news/domain/event_anchors.py`
+     derives names from capitalization alone: words capitalized at every
+     occurrence and used mid-sentence in the body, excluding English function
+     words and calendar names. No named-entity model and no word lists of
+     places or topics are involved.
+3. Otherwise a new Story is created, with reason `NO_CANDIDATES`,
+   `NO_COMPATIBLE_CANDIDATE`, `ABOVE_THRESHOLD` (nothing within the secondary
+   bound) or `VERIFICATION_REJECTED` (every candidate in the band failed
+   verification). v0.3 still prefers splitting one event over merging two.
+
+The matcher never reads `content_fingerprint`, `duplicate_of`, Source identity
+or Topic/Entity rows: it works when enrichment has never run. The secondary
+evidence costs three queries per decision, only when the primary rule leaves
+it unresolved, and at most 10 candidates × 20 members × 2000 characters;
+distances are computed in PostgreSQL.
 
 | Setting | Value |
 | --- | --- |
 | `NEWS_STORY_MATCH_MAX_DISTANCE` | `0.18` |
 | `NEWS_STORY_MATCH_MAX_TIME_GAP_HOURS` | `48` |
+| `NEWS_STORY_MATCH_SECONDARY_MAX_DISTANCE` | `0.25` |
+| `NEWS_STORY_MATCH_VERIFY_MAX_MEMBERS` | `20` |
 
-Both values come from measurements on the #26 corpus, which are recorded next
-to them in `config/common.py`. Both are part of `MATCHER_KEY`
-(`story-match-v1;max_distance=0.18;max_time_gap_hours=48.0`), which each
-association stores, so a policy change is visible in the data.
+Every value and the rule revision are part of `MATCHER_KEY`:
 
-The measured result with the local model is precision 1.000, recall 0.632,
-0 false merges and 7 false-split pairs. The known trade-off is that reworded
-or day-by-day coverage just above the threshold starts its own Story.
-`tests/news/test_story_matching_corpus.py` enforces these numbers as bounds.
-The default suite replays the local model's recorded corpus vectors offline
-(`tests/news/recorded_embeddings.py`), because the hashing test double cannot
-express the corpus semantics. The opt-in `local_embedding` run checks the
-recording against the live model.
+```text
+story-match-v2;max_distance=0.18;max_time_gap_hours=48.0;secondary_max_distance=0.25;min_anchors=1;max_members=20
+```
 
-Each association records `matcher_key`, the `similarity` (cosine similarity,
-`1 - distance`; NULL for `CREATED_STORY`) and an `evidence` object. The
-evidence holds only identifiers and numbers: the reason, the distance, the
-candidate count, the nearest five candidates, the thresholds and the embedding
-`model_key`.
+Each association stores it, so #29 reconciliation treats every revision 1
+(`story-match-v1;max_distance=0.18;max_time_gap_hours=48.0`) assignment as
+stale and rebuilds it once through `match_step`. No migration is involved.
+
+**Why two stages.** On the #26 corpus one cosine threshold cannot separate the
+events. Same-event reports reach 0.215 (the Almen flood). Different-event
+reports sit at 0.192 (two templated earthquake bulletins for different
+places) and at 0.217–0.230 (the dam inquiry against the merged flood Story).
+Proper names reject the lookalikes. The member bound rejects the inquiry: it
+shares the river's name, but no flood report is closer than 0.268. The
+rationale and margins are next to the values in `config/common.py`.
+
+**Measured on the #26 corpus** (synthetic regression corpus, 26 Articles,
+12 events, local model `fastembed:BAAI/bge-small-en-v1.5@52398278842e`; not a
+production quality estimate):
+
+| | precision | recall | false merges | false splits | unassigned | Stories |
+| --- | --- | --- | --- | --- | --- | --- |
+| Revision 1, matcher alone (#28) | 1.000 | 0.632 | 0 | 7 pairs | 0 | — |
+| Revision 1, full pipeline with refresh (#34 diagnostics) | 1.000 | 0.789 | 0 | 4 pairs | 0 | 15 |
+| Revision 2, matcher alone | 1.000 | 1.000 | 0 | 0 | 0 | 12 |
+| Revision 2, full pipeline with refresh | 1.000 | 1.000 | 0 | 0 | 0 | 12 |
+| Revision 2, full pipeline, then every Article reprocessed | 1.000 | 1.000 | 0 | 0 | 0 | 12 active (+2 archived empties) |
+
+`tests/news/test_story_matching_corpus.py` enforces the matcher-alone numbers,
+including convergence of revision 1 splits through reconciliation and their
+stability under reprocessing. The default suite replays the local model's
+recorded corpus vectors offline (`tests/news/recorded_embeddings.py`), because
+the hashing test double cannot express the corpus semantics. The opt-in
+`local_embedding` run checks the recording against the live model.
+
+Each association records `matcher_key`, the `similarity` (cosine similarity
+to the chosen Story, `1 - distance`, whichever rule accepted it; NULL for
+`CREATED_STORY`) and an `evidence` object of identifiers, enums and numbers:
+the `reason`, the `rule`, the deciding distance, the candidate count, the
+nearest five candidates, every secondary `verification` (Story id, distance,
+`result`, nearest member distance, members checked, shared-name count; at most
+five), the thresholds and the embedding `model_key`. Names themselves are
+publication text and are never stored or logged; only their count is.
 
 Replays return the existing primary association. Races are settled by
 PostgreSQL uniqueness and a re-read. A chosen Story found `ARCHIVED` under its
@@ -831,7 +886,7 @@ Each meaningful step emits **one** record, `News Story step completed` (INFO) or
 | --- | --- | --- |
 | `article_embedding` | `story_processing.embed_step` | `state`, `attempts`, `error_kind`, `pipeline_key` |
 | `candidate_retrieval` | `story_matching.match_article` | `candidate_count` |
-| `matching_decision` | `story_matching.match_article` | `decision` (`MATCH`/`CREATE_NEW_STORY`), `match_reason`, `chosen_story_id`, `distance`, `threshold`, `candidate_count` |
+| `matching_decision` | `story_matching.match_article` | `decision` (`MATCH`/`CREATE_NEW_STORY`), `match_reason`, `match_rule` (`PRIMARY_DISTANCE`/`SECONDARY_EVENT_VERIFY`, null on create), `chosen_story_id`, `distance`, `threshold`, `candidate_count` |
 | `story_association` | `story_matching.match_article` | `outcome` (`MATCHED`, `CREATED_STORY`, `ALREADY_ASSIGNED`), `story_id`, `matcher_key` |
 | `story_matching` | `story_processing.match_step` | `state`, `attempts`, `error_kind`, `story_id` |
 | `story_embedding` | `story_refresh.refresh_story` | `model_key`, `member_count` |
@@ -848,7 +903,7 @@ failed` / `News Story synthesis failed` warnings, now with `step`.
 
 The JSON allowlist gained `step`, `failed_step`, `candidate_count`,
 `chosen_story_id`, `distance`, `threshold`, `decision`, `match_reason`,
-`matcher_key`, `member_count`, `article_count`, `source_count`,
+`match_rule`, `matcher_key`, `member_count`, `article_count`, `source_count`,
 `synthesis_source_count`, `refresh_state` and `refresh_reason`
 (`story_id`, `model_key`, `topic_count`, `entity_count`, `error_kind`,
 `duration_ms`, `state` and `outcome` already existed). Titles, descriptions,
@@ -883,7 +938,8 @@ uv run --locked --env-file .env python manage.py news_story_backlog --pending --
 | --- | --- | --- |
 | Which Stories are stale or failed? | `news_stories --stale` / `--failed` | `REFRESH`, `FAILED_STEP`, `ERROR` columns |
 | Why did Article X join Story Y? | `news_story_explain --article X` | `decision=MATCH`, `chosen_story_id`, the deciding `distance`, the `threshold` in force, `candidate_count` and the recorded candidates |
-| Why did Article X create a new Story? | `news_story_explain --article X` | `decision=CREATE_NEW_STORY` with `reason` `NO_CANDIDATES`, `NO_COMPATIBLE_CANDIDATE` or `ABOVE_THRESHOLD`, plus each recorded candidate's distance |
+| Why did Article X create a new Story? | `news_story_explain --article X` | `decision=CREATE_NEW_STORY` with `reason` `NO_CANDIDATES`, `NO_COMPATIBLE_CANDIDATE`, `ABOVE_THRESHOLD` or `VERIFICATION_REJECTED`, plus each recorded candidate's distance and each secondary verification's `result` |
+| Which rule joined Article X to Story Y? | `news_story_explain --article X` | `match_rule=PRIMARY_DISTANCE` or `SECONDARY_EVENT_VERIFY`, with the verification's nearest member distance and shared-name count; revision 1 evidence is shown as `PRIMARY_DISTANCE`, its only rule |
 | Which Articles support Story Y? | `news_story --story Y` | every member (id, Source, canonical URL, title, publication time, method, recorded distance) with `CITED`, and each synthesis element's supporting Article ids |
 | Which Story-derived step failed? | `news_story --story Y`, `news_story_explain --article X`, `news_story_backlog --failed` | `failed_step` and `error_kind` |
 | How do I reprocess one Article? | `news_story_explain --article X --reprocess` (or `news_story_process --article X --reprocess`) | `reprocess_article` (#29) |
@@ -893,8 +949,12 @@ uv run --locked --env-file .env python manage.py news_story_backlog --pending --
 deciding `distance`, `candidate_count`, at most five candidates with their
 distances, the `max_distance` and `max_time_gap_hours` in force and the
 embedding `model_key`. `candidate_count` counts every candidate retrieved;
-only the nearest five are recorded. `fresh=yes` means the Article is matched
-under the configured `pipeline_key` and still has its primary association.
+only the nearest five are recorded. Since #36 it also holds the `rule` that
+accepted a match, `secondary_max_distance` and the secondary `verification`
+entries, which `news_story_explain` prints as `match_rule`,
+`secondary_threshold` and one line per verified candidate. `fresh=yes` means
+the Article is matched under the configured `pipeline_key` and still has its
+primary association.
 
 **Failed step.** A Story's `refresh_error` records its step. An Article's is
 read from what the failure left: embedding-provider kinds fail at

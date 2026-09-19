@@ -151,6 +151,7 @@ def test_candidate_carries_decision_evidence_and_no_model_instance():
         last_article_published_at=NOW - timedelta(hours=1),
         language="en",
         status=STORY_ACTIVE,
+        first_article_published_at=NOW - timedelta(hours=5),
     )
     assert candidate.distance == pytest.approx(distance_at(20), abs=1e-6)
     assert all(

@@ -98,6 +98,7 @@ SAFE_FIELDS = (
     "threshold",
     "decision",
     "match_reason",
+    "match_rule",
     "matcher_key",
     "member_count",
     "article_count",

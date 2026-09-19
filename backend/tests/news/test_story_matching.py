@@ -1,9 +1,10 @@
-"""Story matching persistence against real PostgreSQL/pgvector (#28).
+"""Story matching persistence against real PostgreSQL/pgvector (#28, #36).
 
 Vectors are placed by hand on the unit circle: a Story at angle θ from the
 Article is at cosine distance 1 - cos θ, so 10° (0.015) is well within the
-0.18 threshold, 40° (0.234) is in the ambiguous band and 70° (0.658) is beyond
-the 0.5 retrieval bound.
+0.18 threshold, 38° (0.212) and 40° (0.234) are in the secondary band up to
+0.25, 50° (0.357) is beyond it and 70° (0.658) is beyond the 0.5 retrieval
+bound.
 """
 
 import json
@@ -23,7 +24,7 @@ from news.application.story_matching import (
     match_article,
 )
 from news.domain.stories import StoryCandidate
-from news.domain.story_matching import MatchKind, MatchReason
+from news.domain.story_matching import MatchKind, MatchReason, MatchRule, VerificationResult
 from news.models import (
     EVIDENCE_MAX_BYTES,
     Article,
@@ -57,7 +58,9 @@ def at(degrees):
 _counter = iter(range(1, 100_000))
 
 
-def make_article(degrees=None, *, published_at=NOW, language="en", duplicate_of=None, text=""):
+def make_article(
+    degrees=None, *, published_at=NOW, language="en", duplicate_of=None, text="", body=""
+):
     number = next(_counter)
     source = Source.objects.create(slug=f"source-{number}", name=f"Source {number}")
     endpoint = SourceEndpoint.objects.create(
@@ -82,7 +85,7 @@ def make_article(degrees=None, *, published_at=NOW, language="en", duplicate_of=
         external_id=f"item-{number}",
         canonical_url=f"https://s{number}.example/item",
         title=text or f"Article {number}",
-        body_text=text,
+        body_text=body or text,
         language=language,
         content_fingerprint="f" * 64 if duplicate_of else f"{number:064d}",
         duplicate_of=duplicate_of,
@@ -159,20 +162,159 @@ def test_nearby_article_joins_the_story_with_persisted_evidence():
 
 
 @pytest.mark.django_db
-def test_ambiguous_band_starts_a_new_story_and_records_why():
+def test_secondary_band_without_shared_names_starts_a_new_story_and_records_why():
     match(make_article(0))
     ambiguous = make_article(40)
 
     outcome = match(ambiguous)
 
     assert outcome.state is MatchState.CREATED_STORY
-    assert outcome.decision.reason is MatchReason.ABOVE_THRESHOLD
+    assert outcome.decision.reason is MatchReason.VERIFICATION_REJECTED
     association = StoryArticle.objects.get(article=ambiguous)
-    assert association.evidence["reason"] == MatchReason.ABOVE_THRESHOLD
-    assert association.evidence["distance"] == pytest.approx(
-        1 - math.cos(math.radians(40)), abs=1e-6
-    )
+    evidence = association.evidence
+    distance = 1 - math.cos(math.radians(40))
+    assert evidence["reason"] == MatchReason.VERIFICATION_REJECTED
+    assert evidence["rule"] is None
+    assert evidence["distance"] == pytest.approx(distance, abs=1e-6)
+    (check,) = evidence["verification"]
+    assert check["result"] == VerificationResult.NO_SHARED_ANCHOR
+    assert check["member_distance"] == pytest.approx(distance, abs=1e-6)
+    assert (check["members_checked"], check["shared_anchors"]) == (1, 0)
     assert Story.objects.count() == 2
+
+
+@pytest.mark.django_db
+def test_beyond_the_secondary_band_nothing_is_verified():
+    match(make_article(0))
+    far = make_article(50)
+
+    outcome = match(far)
+
+    assert outcome.decision.reason is MatchReason.ABOVE_THRESHOLD
+    evidence = StoryArticle.objects.get(article=far).evidence
+    assert (evidence["reason"], evidence["rule"], evidence["verification"]) == (
+        MatchReason.ABOVE_THRESHOLD,
+        None,
+        [],
+    )
+
+
+@pytest.mark.django_db
+def test_secondary_verified_match_records_its_rule_and_keeps_cosine_similarity():
+    first = make_article(0, body="Crews reopened the bridge in Tarnholt on Monday.")
+    story_id = match(first).story_id
+    later = make_article(38, body="Traffic returned to Tarnholt after the repairs.")
+
+    outcome = match(later)
+
+    assert (outcome.state, outcome.story_id) == (MatchState.MATCHED, story_id)
+    assert outcome.decision.rule is MatchRule.SECONDARY_EVENT_VERIFY
+    association = StoryArticle.objects.get(article=later)
+    distance = 1 - math.cos(math.radians(38))
+    assert association.method == StoryArticle.Method.MATCHED
+    assert association.matcher_key == MATCHER_KEY
+    # Similarity stays cosine similarity to the chosen Story, not a verifier score.
+    assert association.similarity == pytest.approx(1 - distance, abs=1e-6)
+    evidence = association.evidence
+    assert evidence["reason"] == MatchReason.VERIFIED_SAME_EVENT
+    assert evidence["rule"] == MatchRule.SECONDARY_EVENT_VERIFY
+    assert evidence["secondary_max_distance"] == 0.25
+    assert evidence["verification"] == [
+        {
+            "story_id": story_id,
+            "distance": pytest.approx(distance, abs=1e-6),
+            "result": "ACCEPTED",
+            "member_distance": pytest.approx(distance, abs=1e-6),
+            "members_checked": 1,
+            "shared_anchors": 1,
+        }
+    ]
+    assert "tarnholt" not in json.dumps(evidence).lower()
+
+
+@pytest.mark.django_db
+def test_primary_match_records_the_primary_rule():
+    story_id = match(make_article(0)).story_id
+    near = make_article(10)
+
+    outcome = match(near)
+
+    evidence = StoryArticle.objects.get(article=near).evidence
+    assert outcome.story_id == story_id
+    assert (evidence["reason"], evidence["rule"]) == ("WITHIN_THRESHOLD", "PRIMARY_DISTANCE")
+    assert evidence["verification"] == []
+
+
+def make_story(degrees, members):
+    """A Story whose vector sits at `degrees`, with the given member Articles."""
+
+    story = Story.objects.create(language="en")
+    for member in members:
+        StoryArticle.objects.create(
+            story=story, article=member, is_primary=True, method=StoryArticle.Method.MANUAL
+        )
+    StoryEmbedding.objects.create(
+        story=story, model_key=KEY, dimension=2, vector=at(degrees), member_count=len(members)
+    )
+    return story
+
+
+@pytest.mark.django_db
+def test_a_story_vector_near_a_report_no_member_resembles_is_rejected():
+    member = make_article(60, body="Crews reopened the bridge in Tarnholt on Monday.")
+    story = make_story(38, [member])
+    incoming = make_article(0, body="Traffic returned to Tarnholt after the repairs.")
+
+    outcome = match(incoming)
+
+    assert outcome.state is MatchState.CREATED_STORY and outcome.story_id != story.pk
+    (check,) = StoryArticle.objects.get(article=incoming).evidence["verification"]
+    assert check["result"] == VerificationResult.MEMBER_TOO_FAR
+    assert check["member_distance"] == pytest.approx(0.5, abs=1e-6)
+    assert check["shared_anchors"] == 1
+
+
+@pytest.mark.django_db
+def test_verification_reads_a_bounded_member_set_in_three_queries(django_assert_num_queries):
+    from django.conf import settings
+
+    from news.application.story_verification import gather_evidence
+
+    stories = [
+        make_story(
+            36 + index,
+            [make_article(36 + index, published_at=NOW - timedelta(minutes=m)) for m in range(25)],
+        )
+        for index in range(3)
+    ]
+    incoming = make_article(0)
+    candidates = find_candidates(incoming.pk, KEY)
+
+    with django_assert_num_queries(3):
+        evidence = gather_evidence(incoming.pk, KEY, candidates, matching_module.MATCH_POLICY)
+
+    assert set(evidence) == {story.pk for story in stories}
+    for item in evidence.values():
+        assert item.members_checked == settings.NEWS_STORY_MATCH_VERIFY_MAX_MEMBERS == 20
+        assert item.nearest_member_distance is not None
+
+
+@pytest.mark.django_db
+def test_rejected_verifications_stay_bounded_and_content_free():
+    # Lowercase: an uppercase sentinel mid-sentence would itself be a shared name.
+    secret = SECRET.lower()
+    for degrees in range(36, 46):
+        make_story(degrees, [make_article(degrees, body=f"Crews met in Tarnholt. {secret}")])
+    article = make_article(0, body=f"Nobody from there spoke. {secret}")
+
+    outcome = match(article)
+
+    assert outcome.decision.reason is MatchReason.VERIFICATION_REJECTED
+    evidence = StoryArticle.objects.get(article=article).evidence
+    encoded = json.dumps(evidence)
+    assert len(evidence["verification"]) == EVIDENCE_CANDIDATES
+    assert len(encoded.encode()) < EVIDENCE_MAX_BYTES
+    assert secret not in encoded.lower() and "tarnholt" not in encoded.lower()
 
 
 @pytest.mark.django_db
@@ -238,10 +380,13 @@ def test_evidence_is_bounded_identifiers_and_numbers_only():
     assert len(encoded.encode()) < EVIDENCE_MAX_BYTES
     assert set(evidence) == {
         "reason",
+        "rule",
         "distance",
         "candidate_count",
         "candidates",
+        "verification",
         "max_distance",
+        "secondary_max_distance",
         "max_time_gap_hours",
         "embedding_model_key",
     }
@@ -284,6 +429,7 @@ def test_story_archived_after_retrieval_is_rejected_under_its_lock(monkeypatch):
         member_count=1,
         last_article_published_at=NOW,
         language="en",
+        first_article_published_at=NOW,
     )
     assert outcome.state is MatchState.CREATED_STORY
     assert outcome.story_id != target
@@ -333,3 +479,75 @@ def test_default_model_key_comes_from_the_configured_provider():
     assert (
         StoryEmbedding.objects.get().model_key == DeterministicEmbeddingProvider.identity.model_key
     )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("key", ["title", "body_text", "description", "payload"])
+def test_content_keys_are_refused_inside_secondary_evidence(key):
+    """The #24 evidence guard also covers the nested `verification` entries (#36)."""
+
+    from django.core.exceptions import ValidationError
+
+    story = Story.objects.create(language="en")
+    with pytest.raises(ValidationError, match="Publication content key is forbidden"):
+        StoryArticle.objects.create(
+            story=story,
+            article=make_article(),
+            is_primary=True,
+            method=StoryArticle.Method.MATCHED,
+            evidence={"verification": [{"story_id": story.pk, key: "copied text"}]},
+        )
+
+
+MATCHER_MODULES = (
+    "news/application/story_matching.py",
+    "news/application/story_verification.py",
+    "news/application/story_candidates.py",
+    "news/domain/story_matching.py",
+    "news/domain/event_anchors.py",
+)
+
+
+@pytest.mark.parametrize("module", MATCHER_MODULES)
+def test_matcher_code_reads_no_enrichment_deduplication_or_source_identity(module):
+    """#36: matching must work before enrichment and never treat dedup as event identity."""
+
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse((Path(__file__).resolve().parents[2] / module).read_text())
+    docstrings = {
+        id(node.body[0].value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Module | ast.FunctionDef | ast.ClassDef)
+        and node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+    }
+    used = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    used |= {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+    used |= {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+    literals = " ".join(
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and id(node) not in docstrings
+    )
+    forbidden = {
+        "Topic",
+        "Entity",
+        "StoryTopic",
+        "StoryEntity",
+        "duplicate_of",
+        "source_id",
+        "Source",
+    }
+    assert not used & forbidden, used & forbidden
+    for word in ("topic", "entity", "duplicate_of", "source_id", "content_fingerprint"):
+        assert word not in literals, word

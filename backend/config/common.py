@@ -143,11 +143,36 @@ NEWS_STORY_CANDIDATE_WINDOW_HOURS = 168
 # - 48 h separates the reelection announcement (61 h after the budget vote,
 #   distance 0.177) from the budget Story while keeping the two-day harbor
 #   follow-up (47 h after the Story's latest member). 72 h merges them.
-# Known trade-off: splits are preferred to merges. Reworded coverage above 0.18
-# starts its own Story (harbor-storm-03 at 0.199, varrow-budget-02 at 0.189,
-# the daily Almen flood reports at 0.21-0.24).
+# Known trade-off of revision 1: splits are preferred to merges. Reworded
+# coverage above 0.18 started its own Story (harbor-storm-03 at 0.199,
+# varrow-budget-02 at 0.189, the daily Almen flood reports at 0.21-0.24); the
+# secondary verifier below recovers it without moving 0.18.
 NEWS_STORY_MATCH_MAX_DISTANCE = 0.18
 NEWS_STORY_MATCH_MAX_TIME_GAP_HOURS = 48
+
+# Secondary event verifier (#36, matcher revision 2). Above the primary 0.18, a
+# time-compatible candidate up to NEWS_STORY_MATCH_SECONDARY_MAX_DISTANCE is
+# joined only when one of its NEWS_STORY_MATCH_VERIFY_MAX_MEMBERS most recent
+# members is itself within that distance of the Article and the two share at
+# least one proper name (news/domain/event_anchors.py). A single cosine
+# threshold cannot do this: on the #26 corpus same-event reports reach 0.215
+# (Almen flood) while different-event reports sit at 0.192 (the two templated
+# earthquakes) and 0.217-0.230 (the dam inquiry against the merged flood Story).
+# - The names separate the lookalikes: the earthquakes name different places,
+#   the Lowmere and Varrow budget votes different towns.
+# - The member bound separates the inquiry, which shares the river's name but
+#   whose nearest flood report is 0.268 away: only the flood Story's centroid
+#   drifted towards it.
+# - 0.25 sits above the farthest same-event nearest member (0.215, margin 0.035)
+#   and below the nearest different-event member that shares a name (0.268,
+#   margin 0.018). Like 0.18, it is calibrated on the synthetic corpus, not on
+#   production data; the anchor rule, not the bound, carries the decision.
+# The 48 h time gap is measured to the candidate's member publication range
+# (zero inside it) since revision 2: identical for chronological arrivals, but
+# reprocessing the first flood report (72 h before the Story's newest member)
+# no longer splits it off the Story it opened.
+NEWS_STORY_MATCH_SECONDARY_MAX_DISTANCE = 0.25
+NEWS_STORY_MATCH_VERIFY_MAX_MEMBERS = 20
 
 # Story processing orchestration (#29). The flag gates only the automatic
 # entry points — dispatch after an Article commits and the reconciliation Beat

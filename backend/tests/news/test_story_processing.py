@@ -26,6 +26,7 @@ from news.application.ingest import ingest_endpoint
 from news.application.ports import FetchedItem, FetchResult
 from news.application.process import process_raw_article
 from news.application.story_candidates import find_candidates
+from news.application.story_matching import MATCHER_KEY
 from news.application.story_ports import EmbeddingError, EmbeddingErrorKind, EmbeddingModel
 from news.application.story_processing import (
     PipelineKeys,
@@ -456,6 +457,41 @@ def test_matcher_key_change_alone_makes_processed_articles_stale(monkeypatch):
 
     assert current_keys().embedding_model_key == DeterministicEmbeddingProvider.identity.model_key
     assert reconciliation_candidates() == [article.pk for article in articles]
+
+
+REVISION_ONE_KEY = "story-match-v1;max_distance=0.18;max_time_gap_hours=48.0"
+
+
+@pytest.mark.django_db
+def test_revision_one_assignments_are_stale_under_the_revision_two_matcher():
+    """#36 changed the matcher_key, so #29 rebuilds every v1 assignment once."""
+
+    articles = [make_article() for _ in range(2)]
+    for article in articles:
+        process_article(article.pk)
+    # As a v0.3 database matched by revision 1 would hold them.
+    ArticleStoryProcessing.objects.update(matcher_key=REVISION_ONE_KEY)
+    StoryArticle.objects.update(matcher_key=REVISION_ONE_KEY)
+    age_rows()
+
+    assert MATCHER_KEY.startswith("story-match-v2;") and MATCHER_KEY != REVISION_ONE_KEY
+    assert reconciliation_candidates() == [article.pk for article in articles]
+
+    for article in articles:
+        assert process_article(article.pk).state == ArticleStoryProcessing.State.MATCHED
+    assert set(ArticleStoryProcessing.objects.values_list("matcher_key", flat=True)) == {
+        MATCHER_KEY
+    }
+    assert set(StoryArticle.objects.values_list("matcher_key", flat=True)) == {MATCHER_KEY}
+    assert StoryArticle.objects.filter(is_primary=True).count() == len(articles)
+
+    # Current under the new key: nothing to reconcile, and processing is a no-op.
+    associations = list(StoryArticle.objects.order_by("pk").values_list("pk", "story_id"))
+    age_rows()
+    assert reconciliation_candidates() == []
+    for article in articles:
+        process_article(article.pk)
+    assert list(StoryArticle.objects.order_by("pk").values_list("pk", "story_id")) == associations
 
 
 @pytest.mark.django_db
