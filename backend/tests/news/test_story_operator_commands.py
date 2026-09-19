@@ -178,6 +178,7 @@ def test_explains_a_secondary_verified_match(corpus, monkeypatch):
     decision = line_with(output, "decision=")
     assert "decision=MATCH reason=VERIFIED_SAME_EVENT match_rule=SECONDARY_EVENT_VERIFY" in decision
     assert f"chosen_story_id={budget} distance=0.188946 threshold=0.18" in decision
+    assert "secondary_threshold=0.25 secondary_member_threshold=0.22" in decision
     assert "secondary_verifications=1" in output
     assert (
         f"  story_id={budget} distance=0.188946 result=ACCEPTED member_distance=0.188946 "
@@ -186,7 +187,7 @@ def test_explains_a_secondary_verified_match(corpus, monkeypatch):
     assert (
         f"explanation: joined Story {budget} by the secondary event verifier: distance "
         f"0.188946 is above the primary threshold 0.18 and within the secondary bound 0.25; "
-        f"nearest member at 0.188946, 1 shared name(s)"
+        f"nearest member at 0.188946 (member bound 0.22), 1 shared name(s)"
     ) in output
 
 
@@ -235,8 +236,46 @@ def test_explains_revision_one_evidence_as_the_primary_rule(corpus):
     output = run("news_story_explain", "--article", str(article_id))
 
     assert "decision=MATCH reason=WITHIN_THRESHOLD match_rule=PRIMARY_DISTANCE" in output
-    assert "secondary_threshold=None" in output and "secondary_verifications=0" in output
+    assert "secondary_threshold=None secondary_member_threshold=None" in output
+    assert "secondary_verifications=0" in output
     assert f"explanation: joined Story {story}: the nearest compatible" in output
+
+
+@pytest.mark.django_db
+def test_explains_a_stale_assignment_that_kept_its_story(corpus):
+    process(corpus, "harbor-storm-01")
+    story = story_of(corpus, "harbor-storm-01")
+    article_id = corpus.article_ids["harbor-storm-02"]
+    StoryArticle.objects.create(
+        story_id=story,
+        article_id=article_id,
+        is_primary=True,
+        method=StoryArticle.Method.MATCHED,
+        similarity=0.93,
+        matcher_key="story-match-v3;test",
+        evidence={
+            "reason": "WITHIN_THRESHOLD",
+            "rule": "PRIMARY_DISTANCE",
+            "kept_current_story": True,
+            "distance": 0.07,
+            "candidate_count": 2,
+            "candidates": [{"story_id": story + 1, "distance": 0.05}],
+            "verification": [],
+            "max_distance": 0.18,
+            "secondary_max_distance": 0.25,
+            "secondary_max_member_distance": 0.22,
+            "max_time_gap_hours": 48.0,
+            "embedding_model_key": "fastembed:test",
+        },
+    )
+
+    output = run("news_story_explain", "--article", str(article_id))
+
+    assert "match_rule=PRIMARY_DISTANCE kept_current_story=yes" in output
+    assert (
+        f"explanation: stayed in Story {story} when its stale assignment was re-decided: the "
+        f"current policy still accepts it at distance 0.070000 (WITHIN_THRESHOLD)"
+    ) in output
 
 
 @pytest.mark.django_db

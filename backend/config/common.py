@@ -143,6 +143,8 @@ NEWS_STORY_CANDIDATE_WINDOW_HOURS = 168
 # - 48 h separates the reelection announcement (61 h after the budget vote,
 #   distance 0.177) from the budget Story while keeping the two-day harbor
 #   follow-up (47 h after the Story's latest member). 72 h merges them.
+# #38's 32-Article corpus leaves these margins unchanged: its nearest new
+# different-event pair within the time gap is 0.227 (the Tarvia drone pair).
 # Known trade-off of revision 1: splits are preferred to merges. Reworded
 # coverage above 0.18 started its own Story (harbor-storm-03 at 0.199,
 # varrow-budget-02 at 0.189, the daily Almen flood reports at 0.21-0.24); the
@@ -153,25 +155,48 @@ NEWS_STORY_MATCH_MAX_TIME_GAP_HOURS = 48
 # Secondary event verifier (#36, matcher revision 2). Above the primary 0.18, a
 # time-compatible candidate up to NEWS_STORY_MATCH_SECONDARY_MAX_DISTANCE is
 # joined only when one of its NEWS_STORY_MATCH_VERIFY_MAX_MEMBERS most recent
-# members is itself within that distance of the Article and the two share at
-# least one proper name (news/domain/event_anchors.py). A single cosine
-# threshold cannot do this: on the #26 corpus same-event reports reach 0.215
-# (Almen flood) while different-event reports sit at 0.192 (the two templated
-# earthquakes) and 0.217-0.230 (the dam inquiry against the merged flood Story).
+# members is itself close to the Article (within that same distance in
+# revision 2, within NEWS_STORY_MATCH_SECONDARY_MAX_MEMBER_DISTANCE since
+# revision 3, see below) and the two share at least one proper name
+# (news/domain/event_anchors.py). A single cosine threshold cannot do this: on
+# the #26 corpus same-event reports reach 0.215 (Almen flood) while
+# different-event reports sit at 0.192 (the two templated earthquakes) and
+# 0.217-0.230 (the dam inquiry against the merged flood Story).
 # - The names separate the lookalikes: the earthquakes name different places,
 #   the Lowmere and Varrow budget votes different towns.
 # - The member bound separates the inquiry, which shares the river's name but
 #   whose nearest flood report is 0.268 away: only the flood Story's centroid
 #   drifted towards it.
-# - 0.25 sits above the farthest same-event nearest member (0.215, margin 0.035)
-#   and below the nearest different-event member that shares a name (0.268,
-#   margin 0.018). Like 0.18, it is calibrated on the synthetic corpus, not on
-#   production data; the anchor rule, not the bound, carries the decision.
+# - In revision 2, 0.25 was also the member bound. It sat above the farthest
+#   same-event nearest member (0.215, margin 0.035) and below the nearest
+#   different-event member that shared a name (0.268, margin 0.018). Like 0.18,
+#   it is calibrated on the synthetic corpus, not on production data.
 # The 48 h time gap is measured to the candidate's member publication range
 # (zero inside it) since revision 2: identical for chronological arrivals, but
 # reprocessing the first flood report (72 h before the Story's newest member)
 # no longer splits it off the Story it opened.
 NEWS_STORY_MATCH_SECONDARY_MAX_DISTANCE = 0.25
+
+# Member evidence bound (#38, matcher revision 3). Revision 2 used 0.25 both to
+# pick secondary candidates and to accept their nearest member. A real-world
+# smoke test then merged two different events of one war twice, each on one
+# shared name, with the Story and its only member at 0.243 and 0.246. The
+# corpus now holds synthetic equivalents (schema_version 1, 32 Articles, 16
+# events): the Veldora collapse inquiry against the Sarran strike accusation
+# (member 0.236) and the Estmark drone-readiness warning against the Korvel
+# delegation drone threat (member 0.227), each sharing one name. Measured over
+# every secondary verification, direct and with refresh:
+# - same event: the farthest accepted nearest member is 0.2152 (almen-flood-02);
+# - different events sharing a name: the nearest member is 0.2267 (the drone
+#   pair), then 0.2360 (the conflict pair), then 0.2675 (the dam inquiry).
+# Every bound in [0.2153, 0.2266] measures precision 1.000 and recall 1.000;
+# 0.2152 splits the flood and 0.2267 (so also 0.23) keeps the drone merge.
+# 0.22 is the two-decimal value in that interval (margins 0.0048 and 0.0067).
+# The candidate bound stays 0.25: lowering it to 0.22 splits almen-flood-03,
+# whose Story vector is 0.238 away but whose nearest member is 0.211. Two
+# anchors instead of one splits the Varrow, harbor and flood pairs. Like the
+# others, this bound is calibrated on the synthetic corpus, not production data.
+NEWS_STORY_MATCH_SECONDARY_MAX_MEMBER_DISTANCE = 0.22
 NEWS_STORY_MATCH_VERIFY_MAX_MEMBERS = 20
 
 # Story processing orchestration (#29). The flag gates only the automatic

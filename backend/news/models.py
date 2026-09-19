@@ -14,6 +14,7 @@ from pgvector.django import VectorField
 from news.adapters.targets import assert_allowed_target
 from news.application.ports import FetchError
 from news.application.story_ports import MAX_EMBEDDING_DIMENSION, MAX_MODEL_KEY_LENGTH
+from news.domain.story_matching import MAX_MATCHER_KEY_LENGTH
 
 
 class Source(models.Model):
@@ -383,7 +384,7 @@ class StoryArticle(models.Model):
     # Cosine similarity (1 - pgvector cosine distance) to the matched Story;
     # NULL when the Article created the Story and nothing was compared (#28).
     similarity = models.FloatField(null=True, blank=True)
-    matcher_key = models.CharField(max_length=128, blank=True)
+    matcher_key = models.CharField(max_length=MAX_MATCHER_KEY_LENGTH, blank=True)
     evidence = models.JSONField(default=dict, blank=True)
 
     class Meta:
@@ -477,7 +478,9 @@ class StoryEmbedding(models.Model):
 
     `member_count` is how many member Articles the vector was computed from,
     so a later refresh can tell a stale representation from a current one.
-    A null member_signature denotes an unstamped pre-#32 derived row.
+    A null member_signature denotes an unstamped row: a pre-#32 derived row, or
+    a vector rebuilt from the remaining members when one was removed (#38),
+    which the Story's pending refresh replaces.
     """
 
     story = models.ForeignKey(
@@ -531,7 +534,7 @@ class ArticleStoryProcessing(models.Model):
     error_kind = models.CharField(max_length=32, blank=True)
     error_message = models.CharField(max_length=512, blank=True)
     embedding_model_key = models.CharField(max_length=MAX_MODEL_KEY_LENGTH, blank=True)
-    matcher_key = models.CharField(max_length=128, blank=True)
+    matcher_key = models.CharField(max_length=MAX_MATCHER_KEY_LENGTH, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

@@ -32,9 +32,17 @@ from news.application.story_synthesis import (
     persist_story_synthesis,
     synthesis_input_from_members,
 )
+from news.domain.embeddings import story_vector
 from news.domain.stories import member_signature
 from news.logging import ContextLoggerAdapter, log_step, story_logger
-from news.models import Article, Story, StoryEmbedding, StorySynthesis
+from news.models import (
+    Article,
+    ArticleEmbedding,
+    Story,
+    StoryArticle,
+    StoryEmbedding,
+    StorySynthesis,
+)
 
 #: Where a refresh can fail; recorded as the prefix of `Story.refresh_error`.
 FAILURE_STEPS = ("story_embedding", "story_enrichment", "story_synthesis", "refresh_promotion")
@@ -161,6 +169,46 @@ def mark_story_stale(story_id: int, *, reason: str) -> None:
         refresh_state=Story.RefreshState.STALE, refresh_error=""
     )
     schedule_refresh(story_id, reason=reason)
+
+
+def withdraw_member_vector(story_id: int) -> None:
+    """Call inside the transaction that removed a member from the Story (#38).
+
+    Until the refresh runs, the Story vector still averages in the removed
+    Article, so re-matching that Article compared it with a vector it is part
+    of: reconciliation and reprocessing could never undo a merge. Each Story
+    vector is rebuilt here as the `story_vector` mean of the remaining members'
+    stored embeddings for its model and left unstamped (`member_signature`
+    NULL). The refresh this removal queued replaces it with the vector of the
+    members' current text. Without a stored embedding for every remaining
+    member there is no faithful vector, so it is removed and the Story is not
+    a candidate until refreshed. An emptied Story is never a candidate and is
+    left to the refresh to archive.
+    """
+
+    if not transaction.get_connection().in_atomic_block:
+        raise RuntimeError("Story vector withdrawal requires a transaction")
+    # Story row first, then its vectors: the order the refresh promotion locks in.
+    list(Story.objects.select_for_update().filter(pk=story_id).values_list("pk"))
+    members = list(
+        StoryArticle.objects.filter(story_id=story_id).values_list("article_id", flat=True)
+    )
+    if not members:
+        return
+    for embedding in StoryEmbedding.objects.select_for_update().filter(story_id=story_id):
+        vectors = list(
+            ArticleEmbedding.objects.filter(
+                article_id__in=members, model_key=embedding.model_key
+            ).values_list("vector", flat=True)
+        )
+        if len(vectors) != len(members):
+            embedding.delete()
+            continue
+        embedding.vector = list(story_vector(vectors))
+        embedding.member_count = len(vectors)
+        embedding.member_signature = None
+        embedding.generated_at = timezone.now()
+        embedding.save()
 
 
 def _result(

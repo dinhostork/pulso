@@ -56,10 +56,11 @@ from tests.news.story_pipeline import (
     use_recorded_provider,
 )
 
-# Matcher v2 (#36), with each Story refreshed before the next Article is matched:
-# 12 active Stories, 26 associations, exactly the corpus's 12 labeled events.
-# Revision 1 produced 15 Stories here (Varrow and Almen flood stayed split);
-# those historical measurements are retained in test_story_quality.py.
+# Matcher v3 (#38), with each Story refreshed before the next Article is matched:
+# 16 active Stories, 32 associations, exactly the corpus's 16 labeled events.
+# Revision 1 produced 15 Stories on the 26-Article corpus (Varrow and Almen
+# flood stayed split); revision 2 merged both #38 hard negatives here (14
+# Stories). Those historical measurements are retained in test_story_quality.py.
 EXPECTED_STORIES = {
     # same_event_different_source / _different_wording / _later_reporting:
     # three Sources; harbor-storm-03 (different wording) joins at 0.168 against
@@ -85,9 +86,17 @@ EXPECTED_STORIES = {
     frozenset({"almen-flood-01", "almen-flood-02", "almen-flood-03"}),
     # story_drift_boundary: the inquiry is a separate event from the flood.
     frozenset({"almen-inquiry-01", "almen-inquiry-02"}),
+    # same_conflict_different_event (#38): the army's inquiry into its own
+    # collapse and the movement's strike accusation, one war, two Stories.
+    frozenset({"dunmar-collapse-01"}),
+    frozenset({"sarran-strikes-01", "sarran-strikes-02"}),
+    # same_war_technology_different_event (#38): the readiness warning and the
+    # drone threat to the delegation, one war and weapon, two Stories.
+    frozenset({"tarvia-drone-warning-01"}),
+    frozenset({"tarvia-delegation-drones-01", "tarvia-delegation-drones-02"}),
 }
-EXPECTED_STORY_COUNT = 12
-EXPECTED_ASSOCIATION_COUNT = 26
+EXPECTED_STORY_COUNT = 16
+EXPECTED_ASSOCIATION_COUNT = 32
 
 
 @pytest.fixture
@@ -323,6 +332,33 @@ def test_almen_flood_converges_and_keeps_the_inquiry_separate(pipeline):
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("scenario", "rejected"),
+    [
+        ("same_conflict_different_event", "sarran-strikes-01"),
+        ("same_war_technology_different_event", "tarvia-delegation-drones-01"),
+    ],
+)
+def test_one_war_two_events_stay_separate_by_member_evidence(pipeline, scenario, rejected):
+    """#38: the report reaches the secondary verifier, shares a name with the
+    other event's Story and is rejected only because no member is close enough."""
+
+    events = scenario_events(pipeline, scenario)
+    assert_one_story_per_event(pipeline, events)
+    stories = {story_of(pipeline, event_articles(pipeline, event)[0]).pk for event in events}
+    assert len(stories) == 2
+
+    row = association(pipeline, rejected)
+    assert row.method == StoryArticle.Method.CREATED_STORY
+    assert row.evidence["reason"] == MatchReason.VERIFICATION_REJECTED
+    (check,) = row.evidence["verification"]
+    assert check["result"] == VerificationResult.MEMBER_TOO_FAR
+    assert check["shared_anchors"] >= 1
+    assert 0.18 < check["distance"] <= row.evidence["secondary_max_distance"] == 0.25
+    assert row.evidence["secondary_max_member_distance"] == 0.22 < check["member_distance"]
+
+
+@pytest.mark.django_db
 def test_syndicated_publication_joins_through_matching_not_duplicate_of(pipeline):
     copy = association(pipeline, "rail-strike-02")
     original = pipeline.article_ids["rail-strike-01"]
@@ -547,9 +583,10 @@ def test_operator_reprocessing_of_every_article_keeps_the_grouping_and_provenanc
     assert set(emptied.values_list("status", "article_count", "source_count")) <= {
         (Story.Status.ARCHIVED, 0, 0)
     }
-    # Reprocessing the two singleton events leaves two empty historical rows.
-    assert emptied.count() == 2
-    assert Story.objects.filter(status=Story.Status.ARCHIVED).count() == 2
+    # Reprocessing the four singleton events (almen-quake-01, chess-final-01,
+    # dunmar-collapse-01, tarvia-drone-warning-01) leaves four empty historical rows.
+    assert emptied.count() == 4
+    assert Story.objects.filter(status=Story.Status.ARCHIVED).count() == 4
     assert not Story.objects.filter(
         status=Story.Status.ACTIVE, story_articles__isnull=True
     ).exists()
@@ -559,7 +596,7 @@ def test_operator_reprocessing_of_every_article_keeps_the_grouping_and_provenanc
             candidate.story_id for candidate in find_candidates(article_id, MODEL_KEY)
         ), grouping_diagnostics(pipeline)
     assert set(original.values()) <= set(Story.objects.values_list("pk", flat=True))
-    print("reprocess-all: 12 active Stories, 2 archived empty Stories, 26 associations")
+    print("reprocess-all: 16 active Stories, 4 archived empty Stories, 32 associations")
     assert incoherent_stories() == []
     assert not any(duplicate_rows().values()), duplicate_rows()
 

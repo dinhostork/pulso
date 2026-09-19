@@ -1,4 +1,4 @@
-"""Pure Article -> Story matching decision (#28, #36); no Django, models or settings.
+"""Pure Article -> Story matching decision (#28, #36, #38); no Django, models or settings.
 
 The decision sees only evidence available before enrichment: the semantic
 distance of each retrieved candidate, the time between the Article and the
@@ -25,19 +25,33 @@ Rule, applied to candidates re-ordered by (`distance`, `story_id`):
    and the first one verified is the match. Verification needs all of:
    - the anchor rule is defined for the Article's language;
    - the nearest of the candidate's most recent members is itself within
-     `secondary_max_distance` of the Article, so a Story vector cannot pull in
-     a report that no member resembles;
+     `secondary_max_member_distance` of the Article, so a Story vector cannot
+     pull in a report that no member resembles closely. This bound is separate
+     from, and at most, the candidate bound (#38): the Story vector is an
+     average that drifts as members join, so a candidate may lie far out in
+     the band while one concrete member is a near copy of the event, whereas
+     a member merely in the same broader conflict or topic sits near the top
+     of the band and must not confirm the event on its own;
    - at least `min_anchors` proper names in common
      (`news.domain.event_anchors`).
 4. Otherwise a new Story is created: v0.3 still prefers splitting one event
    over merging two, because a merge mixes the facts of distinct events.
+
+Re-deciding a stale assignment (#38). When a policy or model change makes an
+Article's association stale, the application passes the Story it is leaving
+as `current_story_id` (its vector already rebuilt without the Article). That
+Story is kept when rules 1-3, applied to it alone, still accept it; otherwise
+the Article is decided as above. Without this, re-matching one Article at a
+time moves a report between two Stories of one event and strands the first
+report, which is fresh under the new key and never revisited; with it, a Story
+the new policy rejects, such as a revision 2 false merge, is still left.
 
 Every bound is inclusive. Nothing depends on randomness, the clock or
 insertion order.
 """
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
 
@@ -48,8 +62,12 @@ POLICY_NAME = "story-match"
 # Bump whenever the rule above changes; threshold values are part of the key
 # on their own (see `MatchPolicy.matcher_key`). Revision 1 (#28) had only the
 # primary rule; revision 2 (#36) adds the secondary verifier and measures the
-# time gap to the member range instead of the latest member.
-POLICY_REVISION = 2
+# time gap to the member range instead of the latest member; revision 3 (#38)
+# judges the nearest member by its own bound instead of the candidate bound.
+POLICY_REVISION = 3
+# Storage bound of every `matcher_key` column. Revision 2's key already used
+# 113 of the original 128 characters, so revision 3's extra bound needed more.
+MAX_MATCHER_KEY_LENGTH = 255
 
 
 class MatchKind(StrEnum):
@@ -86,6 +104,7 @@ class MatchPolicy:
     max_distance: float
     max_time_gap_hours: float
     secondary_max_distance: float
+    secondary_max_member_distance: float
     min_anchors: int
     max_members: int
 
@@ -96,10 +115,16 @@ class MatchPolicy:
             raise ValueError("max_time_gap_hours must be positive")
         if not self.max_distance < self.secondary_max_distance <= 2:
             raise ValueError("secondary_max_distance must lie above max_distance, at most 2")
+        if not 0 < self.secondary_max_member_distance <= self.secondary_max_distance:
+            raise ValueError(
+                "secondary_max_member_distance must be positive, at most secondary_max_distance"
+            )
         if self.min_anchors < 1:
             raise ValueError("min_anchors must be at least 1")
         if self.max_members < 1:
             raise ValueError("max_members must be positive")
+        if len(self.matcher_key) > MAX_MATCHER_KEY_LENGTH:
+            raise ValueError("matcher_key would not fit its storage columns")
 
     @property
     def matcher_key(self) -> str:
@@ -171,6 +196,8 @@ class MatchDecision:
     rule: MatchRule | None = None
     # Every secondary candidate verified, in verification order.
     verifications: tuple[Verification, ...] = ()
+    # The Article stayed in `current_story_id`, which the rule still accepts.
+    kept_current_story: bool = False
 
 
 def _compatible(
@@ -190,18 +217,38 @@ def _compatible_ordered(
     return [candidate for candidate in ordered if _compatible(article, candidate, policy)]
 
 
-def secondary_candidates(
-    article: ArticleMatchSnapshot, candidates: Sequence[StoryCandidate], policy: MatchPolicy
+def _secondary(
+    compatible: Sequence[StoryCandidate], policy: MatchPolicy
 ) -> tuple[StoryCandidate, ...]:
-    """The candidates the secondary rule would verify, in order; empty when the
-    primary rule already decides. The application gathers evidence for these only."""
-
-    compatible = _compatible_ordered(article, candidates, policy)
     if not compatible or compatible[0].distance <= policy.max_distance:
         return ()
     return tuple(
         candidate for candidate in compatible if candidate.distance <= policy.secondary_max_distance
     )
+
+
+def _current(
+    candidates: Sequence[StoryCandidate], current_story_id: int | None
+) -> tuple[StoryCandidate, ...]:
+    return tuple(candidate for candidate in candidates if candidate.story_id == current_story_id)
+
+
+def secondary_candidates(
+    article: ArticleMatchSnapshot,
+    candidates: Sequence[StoryCandidate],
+    policy: MatchPolicy,
+    current_story_id: int | None = None,
+) -> tuple[StoryCandidate, ...]:
+    """The candidates the secondary rule would verify, in order; empty when the
+    primary rule already decides. With `current_story_id`, also that Story when
+    the rule would verify it on its own. The application gathers evidence for
+    these only."""
+
+    verified = _secondary(_compatible_ordered(article, candidates, policy), policy)
+    current = _secondary(
+        _compatible_ordered(article, _current(candidates, current_story_id), policy), policy
+    )
+    return verified + tuple(candidate for candidate in current if candidate not in verified)
 
 
 def verify_candidate(
@@ -228,7 +275,7 @@ def verify_candidate(
         return result(VerificationResult.LANGUAGE_UNSUPPORTED)
     if evidence is None or evidence.nearest_member_distance is None:
         return result(VerificationResult.NO_MEMBER_EVIDENCE)
-    if evidence.nearest_member_distance > policy.secondary_max_distance:
+    if evidence.nearest_member_distance > policy.secondary_max_member_distance:
         return result(VerificationResult.MEMBER_TOO_FAR)
     if evidence.shared_anchors < policy.min_anchors:
         return result(VerificationResult.NO_SHARED_ANCHOR)
@@ -240,14 +287,30 @@ def decide_story_match(
     candidates: Sequence[StoryCandidate],
     policy: MatchPolicy,
     evidence: Mapping[int, CandidateEvidence] | None = None,
+    current_story_id: int | None = None,
 ) -> MatchDecision:
     """Join by the primary rule, else by the verified secondary rule, else start a new Story.
 
     `evidence` maps Story id to what the application measured for the
     candidates `secondary_candidates` returned; a missing entry fails
-    verification rather than passing it.
+    verification rather than passing it. `current_story_id` is the Story a
+    stale assignment is leaving; it is kept while the rule still accepts it.
     """
 
+    current = _current(candidates, current_story_id)
+    if current:
+        kept = _decide(article, current, policy, evidence)
+        if kept.kind is MatchKind.MATCH:
+            return replace(kept, candidate_count=len(candidates), kept_current_story=True)
+    return _decide(article, candidates, policy, evidence)
+
+
+def _decide(
+    article: ArticleMatchSnapshot,
+    candidates: Sequence[StoryCandidate],
+    policy: MatchPolicy,
+    evidence: Mapping[int, CandidateEvidence] | None,
+) -> MatchDecision:
     count = len(candidates)
     if not candidates:
         return MatchDecision(MatchKind.CREATE_NEW_STORY, MatchReason.NO_CANDIDATES)
@@ -270,7 +333,7 @@ def decide_story_match(
         )
     evidence = evidence or {}
     verifications = []
-    for candidate in secondary_candidates(article, candidates, policy):
+    for candidate in _secondary(compatible, policy):
         verification = verify_candidate(
             article, candidate, evidence.get(candidate.story_id), policy
         )

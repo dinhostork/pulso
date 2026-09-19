@@ -294,6 +294,10 @@ class Explanation:
     candidates: tuple[RecordedCandidate, ...]
     threshold: float | None
     secondary_threshold: float | None
+    # Revision 3 (#38) records the member evidence bound separately; earlier
+    # evidence has none and shows None, not the candidate bound it then shared.
+    secondary_member_threshold: float | None
+    kept_current_story: bool
     verifications: tuple[RecordedVerification, ...]
     max_time_gap_hours: float | None
     embedding_model_key: str
@@ -343,11 +347,18 @@ def _summary(explanation: dict, story_id: int) -> str:
     decision, reason = explanation["decision"], explanation["reason"]
     distance, threshold = explanation["distance"], explanation["threshold"]
     secondary = explanation["secondary_threshold"]
+    member_bound = explanation["secondary_member_threshold"]
     candidates, verifications = explanation["candidates"], explanation["verifications"]
+    if decision == MatchKind.MATCH and explanation["kept_current_story"]:
+        return (
+            f"stayed in Story {story_id} when its stale assignment was re-decided: the current "
+            f"policy still accepts it at distance {_number(distance)} ({reason})"
+        )
     if decision == MatchKind.MATCH and reason == MatchReason.VERIFIED_SAME_EVENT:
         accepted = next((c for c in verifications if c.story_id == story_id), None)
+        within = f" (member bound {member_bound})" if member_bound is not None else ""
         detail = (
-            f"; nearest member at {_number(accepted.member_distance)}, "
+            f"; nearest member at {_number(accepted.member_distance)}{within}, "
             f"{accepted.shared_anchors} shared name(s)"
             if accepted
             else ""
@@ -427,6 +438,10 @@ def explain_article(article_id: int) -> Explanation:
         "distance": _optional_float(evidence.get("distance")),
         "threshold": _optional_float(evidence.get("max_distance")),
         "secondary_threshold": _optional_float(evidence.get("secondary_max_distance")),
+        "secondary_member_threshold": _optional_float(
+            evidence.get("secondary_max_member_distance")
+        ),
+        "kept_current_story": evidence.get("kept_current_story") is True,
         "max_time_gap_hours": _optional_float(evidence.get("max_time_gap_hours")),
         "candidate_count": int(count) if isinstance(count, int) else None,
         "candidates": candidates,

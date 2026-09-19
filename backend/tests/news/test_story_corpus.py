@@ -31,6 +31,8 @@ ADVERSARIAL = (
     "syndicated_duplicate_publication",
     "high_lexical_overlap_different_event",
     "story_drift_boundary",
+    "same_conflict_different_event",
+    "same_war_technology_different_event",
 )
 
 
@@ -152,6 +154,16 @@ def test_scenarios_have_the_shape_they_claim(corpus):
         "almen-dam-inquiry",
     }
     assert len(scenario_events(corpus, "clearly_unrelated_events")) >= 3
+    # One war, two events, each with a second report of its own (#38).
+    for name in ("same_conflict_different_event", "same_war_technology_different_event"):
+        members = corpus.scenarios[name].article_ids
+        assert len(scenario_events(corpus, name)) == 2, name
+        assert len(members) > len(scenario_events(corpus, name)), name
+        offsets = [a(fixture_id).published_offset_minutes for fixture_id in members]
+        assert max(offsets) - min(offsets) < 60 * 48, name
+    assert "Sarran" in a("dunmar-collapse-01").title and "Sarran" in a("sarran-strikes-01").body
+    assert "drone" in a("tarvia-drone-warning-01").title
+    assert "drones" in a("tarvia-delegation-drones-01").title
 
 
 def test_syndicated_copy_is_a_duplicate_but_not_the_whole_event(corpus):

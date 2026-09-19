@@ -89,6 +89,22 @@
         "almen-inquiry-01",
         "almen-inquiry-02"
       ]
+    },
+    "same_conflict_different_event": {
+      "description": "Two events of one ongoing armed conflict that share its actors and places.",
+      "article_ids": [
+        "dunmar-collapse-01",
+        "sarran-strikes-01",
+        "sarran-strikes-02"
+      ]
+    },
+    "same_war_technology_different_event": {
+      "description": "Two events of one war that share its weapon, belligerents and geography.",
+      "article_ids": [
+        "tarvia-drone-warning-01",
+        "tarvia-delegation-drones-01",
+        "tarvia-delegation-drones-02"
+      ]
     }
   },
   "articles": [
@@ -366,6 +382,72 @@
       "expected_event": "almen-dam-inquiry",
       "note": "Second Source on the inquiry.",
       "rationale": "Groups with almen-inquiry-01, not with the flood coverage it refers to."
+    },
+    {
+      "id": "dunmar-collapse-01",
+      "source_slug": "northwind-wire",
+      "title": "Veldora's anti-Sarran forces launch inquiry into sudden military collapse",
+      "body": "Government-aligned forces in Veldora opened an inquiry on Tuesday into the sudden collapse of their lines around Dunmar, where commanders abandoned positions without a fight at the weekend. Officers who ordered the withdrawal will face a military tribunal, a spokesman said.",
+      "language": "en",
+      "published_offset_minutes": 11520,
+      "expected_event": "veldora-dunmar-collapse-inquiry",
+      "note": "The Veldoran army's inquiry into its own collapse at Dunmar.",
+      "rationale": "Same-conflict hard negative: it names Veldora and the Sarran movement like the strike accusation published an hour later, and both belong to one war, but an army investigating its own withdrawal is not a neighbour's air campaign. Joining them is a false merge."
+    },
+    {
+      "id": "sarran-strikes-01",
+      "source_slug": "kestrel-post",
+      "title": "Sarran movement accuses Orlanth of launching 26 strikes in 24 hours",
+      "body": "The Sarran movement accused neighbouring Orlanth on Tuesday of carrying out 26 air strikes in a single day on areas it holds in Veldora. Orlanth's defence ministry did not respond to the claim.",
+      "language": "en",
+      "published_offset_minutes": 11580,
+      "expected_event": "sarran-orlanth-strike-accusation",
+      "note": "The Sarran movement's accusation of air strikes by Orlanth.",
+      "rationale": "Same-conflict hard negative: shares the war, the country and the movement's name with dunmar-collapse-01 and sits close to it in meaning, but reports a different event with different actors."
+    },
+    {
+      "id": "sarran-strikes-02",
+      "source_slug": "meridian-daily",
+      "title": "Rebels say neighbour's jets hit their territory two dozen times",
+      "body": "Sarran rebels in Veldora said warplanes from Orlanth bombed villages and supply roads under their control more than two dozen times between Monday and Tuesday. There was no independent confirmation of the toll.",
+      "language": "en",
+      "published_offset_minutes": 11700,
+      "expected_event": "sarran-orlanth-strike-accusation",
+      "note": "Same strike accusation from another Source, reworded.",
+      "rationale": "Groups with sarran-strikes-01, not with the collapse inquiry it shares a conflict with."
+    },
+    {
+      "id": "tarvia-drone-warning-01",
+      "source_slug": "lowland-review",
+      "title": "Estmark president warns allies are not ready for drone and aerial warfare in Tarvia",
+      "body": "President Anneli Rautas of Estmark said on Wednesday that allied militaries had not kept pace with the drone and aerial warfare in Harvania's war on Tarvia. She urged partners to spend more on air defence and to train their armies for it.",
+      "language": "en",
+      "published_offset_minutes": 12960,
+      "expected_event": "estmark-drone-readiness-warning",
+      "note": "Estmark's president on allied readiness for drone warfare in the Tarvia war.",
+      "rationale": "Same-war hard negative: drones, Harvania and Tarvia also lead the delegation report published an hour later, but a leader's warning about preparedness is not a drone threat to a particular train. Joining them is a false merge."
+    },
+    {
+      "id": "tarvia-delegation-drones-01",
+      "source_slug": "varrow-herald",
+      "title": "Harvania's drones threaten Korvel-bound foreign officials as war effort stalls",
+      "body": "A delegation of allied foreign ministers heading to Korvel, the Tarvian capital, was held on a train for three hours on Wednesday after Harvanian attack drones were reported over the line. Harvania's ground offensive has stalled.",
+      "language": "en",
+      "published_offset_minutes": 13020,
+      "expected_event": "korvel-delegation-drone-threat",
+      "note": "Harvanian drones hold up a ministers' train bound for Korvel.",
+      "rationale": "Same-war hard negative: same war, same weapon and overlapping place names as tarvia-drone-warning-01, but a different concrete event."
+    },
+    {
+      "id": "tarvia-delegation-drones-02",
+      "source_slug": "northwind-wire",
+      "title": "Ministers' train halted near Korvel as drone swarm crosses route",
+      "body": "Foreign ministers bound for Korvel waited aboard their train on Wednesday while Tarvian air defences engaged a swarm of Harvanian drones near the railway. No one in the delegation was hurt.",
+      "language": "en",
+      "published_offset_minutes": 13080,
+      "expected_event": "korvel-delegation-drone-threat",
+      "note": "Same delegation incident from another Source, reworded.",
+      "rationale": "Groups with tarvia-delegation-drones-01, not with the readiness warning."
     }
   ]
 }

@@ -63,6 +63,10 @@ publication.
 | `lowmere-chess-final` | `chess-final-01` (lowland-review, 1700) |
 | `almen-river-flood` | `almen-flood-01` (lowland-review, 5000), `almen-flood-02` (meridian-daily, 6440), `almen-flood-03` (lowland-review, 9320) |
 | `almen-dam-inquiry` | `almen-inquiry-01` (meridian-daily, 10080), `almen-inquiry-02` (lowland-review, 10200) |
+| `veldora-dunmar-collapse-inquiry` | `dunmar-collapse-01` (northwind-wire, 11520) |
+| `sarran-orlanth-strike-accusation` | `sarran-strikes-01` (kestrel-post, 11580), `sarran-strikes-02` (meridian-daily, 11700) |
+| `estmark-drone-readiness-warning` | `tarvia-drone-warning-01` (lowland-review, 12960) |
+| `korvel-delegation-drone-threat` | `tarvia-delegation-drones-01` (varrow-herald, 13020), `tarvia-delegation-drones-02` (northwind-wire, 13080) |
 
 ## Scenario catalog
 
@@ -81,6 +85,8 @@ more than one scenario.
 | `high_lexical_overlap_different_event` | `kestrel-quake-01`, `almen-quake-01`, `kestrel-quake-02` | Two templated wire reports share almost every word but describe separate earthquakes 15 minutes apart. The differently worded local report, not the lookalike, belongs with `kestrel-quake-01`. |
 | `clearly_unrelated_events` | `museum-maps-01`, `museum-maps-02`, `chess-final-01`, `rail-strike-01` | Events with nothing in common, including one single-Article event. |
 | `story_drift_boundary` | `almen-flood-01`, `almen-flood-02`, `almen-flood-03`, `almen-inquiry-01`, `almen-inquiry-02` | A flood covered over several days, then a government inquiry into the dam operator. The inquiry mentions the flood and its places but is a new decision with its own actors. Letting the flood Story absorb it is a false merge. |
+| `same_conflict_different_event` | `dunmar-collapse-01`, `sarran-strikes-01`, `sarran-strikes-02` | One ongoing war (#38). An army opens an inquiry into its own collapse at Dunmar; an hour later the Sarran movement accuses neighbouring Orlanth of 26 air strikes, then a second Source rewords that accusation. The two events share the war, Veldora and the movement's name and sit close in meaning, but merging them is a false merge. |
+| `same_war_technology_different_event` | `tarvia-drone-warning-01`, `tarvia-delegation-drones-01`, `tarvia-delegation-drones-02` | One war and one weapon (#38). A president warns that allies are not ready for drone warfare in Tarvia; an hour later Harvanian drones hold up a ministers' train bound for Korvel, then a second Source rewords that incident. Same war, same technology, overlapping names, different events. |
 
 ## Consuming the corpus
 
@@ -136,18 +142,24 @@ The formulas and zero-denominator rules are documented in `story_metrics.py`.
 ## Quality regression gate
 
 These measurements describe the **repository-owned synthetic regression
-corpus**, not production accuracy: 26 Articles, 12 expected events and 19
+corpus**, not production accuracy: 32 Articles, 16 expected events and 21
 same-event pairs. The recorded embedding model is
 `fastembed:BAAI/bge-small-en-v1.5@52398278842e`.
 
-| Measurement | Precision | Recall | False-merge pairs | False-split pairs | Unassigned |
-| --- | --- | --- | --- | --- | --- |
-| Historical matcher v1 (#28), direct | 1.000 | 0.632 (12/19) | 0 | 7 | 0 |
-| Historical pre-#36 full match + refresh | 1.000 | 0.789 (15/19) | 0 | 4 | 0 |
-| Current matcher v2 (#36), direct | 1.000 | 1.000 (19/19) | 0 | 0 | 0 |
-| Current full v0.3 match + refresh (#34) | 1.000 | 1.000 (19/19) | 0 | 0 | 0 |
+| Measurement | Corpus | Precision | Recall | False-merge pairs | False-split pairs | Unassigned |
+| --- | --- | --- | --- | --- | --- | --- |
+| Historical matcher v1 (#28), direct | 26 Articles | 1.000 | 0.632 (12/19) | 0 | 7 | 0 |
+| Historical pre-#36 full match + refresh | 26 Articles | 1.000 | 0.789 (15/19) | 0 | 4 | 0 |
+| Historical matcher v2 (#36), direct | 26 Articles | 1.000 | 1.000 (19/19) | 0 | 0 | 0 |
+| Historical matcher v2 (#36), full match + refresh | 26 Articles | 1.000 | 1.000 (19/19) | 0 | 0 | 0 |
+| Historical matcher v2 (#36), direct | 32 Articles | 0.870 | 0.952 (20/21) | 3 | 1 | 0 |
+| Historical matcher v2 (#36), full match + refresh | 32 Articles | 0.840 | 1.000 (21/21) | 4 | 0 | 0 |
+| Current matcher v3 (#38), direct | 32 Articles | 1.000 | 1.000 (21/21) | 0 | 0 | 0 |
+| Current matcher v3 (#38), full match + refresh | 32 Articles | 1.000 | 1.000 (21/21) | 0 | 0 | 0 |
 
-The historical figures were measured before #36 and retained in its results;
+The #38 hard negatives were added and measured under matcher v2 before the
+matcher changed: v2 merged both, which is the failure the real-world smoke test
+showed. The historical figures were measured before #36 and retained in its results;
 the direct matcher gate is `test_story_matching_corpus.py`, while #34 owns
 `test_story_engine_end_to_end.py` and `test_story_quality.py`. Current
 false-merge and false-split rates are both 0.000. There is no quality margin:
@@ -155,12 +167,16 @@ every deterministic expected event currently groups correctly, so any new
 merge or split must fail with its fixture ids, labels and Story ids visible.
 Never alter labels or recorded vectors to satisfy a failing quality gate.
 
-Matcher v2 joins the formerly split Varrow budget pair and all three Almen
-flood reports. The inquiry stays separate; the Kestrel/Almen earthquake hard
-negative records `VERIFICATION_REJECTED` / `NO_SHARED_ANCHOR`. Exact membership
-checks require 12 active Stories and 26 associations. Reprocessing every
-Article preserves this partition while retaining 2 archived empty historical
-Stories; those are excluded from candidate retrieval and active counts.
+Matcher v2 joined the formerly split Varrow budget pair and all three Almen
+flood reports, and v3 keeps them. The inquiry stays separate; the Kestrel/Almen
+earthquake hard negative records `VERIFICATION_REJECTED` / `NO_SHARED_ANCHOR`.
+The two #38 hard negatives (`sarran-strikes-01` against the Dunmar inquiry,
+`tarvia-delegation-drones-01` against the readiness warning) record
+`VERIFICATION_REJECTED` / `MEMBER_TOO_FAR` with one shared name. Exact
+membership checks require 16 active Stories and 32 associations. Reprocessing
+every Article preserves this partition while retaining 4 archived empty
+historical Stories, one per single-Article event; those are excluded from
+candidate retrieval and active counts.
 
 The suite also checks reconstruction with News Core provenance unchanged,
 duplicate delivery, current-generation coherence, and the exact controlled

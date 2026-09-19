@@ -1,4 +1,4 @@
-"""The real matcher over the full #26 corpus: scenario guards and quality bounds.
+"""The real matcher over the full #26/#38 corpus: scenario guards and quality bounds.
 
 Corpus Articles are embedded with `RecordedEmbeddingProvider`, which replays
 the pinned local model's vectors offline (see `recorded_embeddings.py` for why
@@ -15,7 +15,12 @@ story-match-v1;max_distance=0.18;max_time_gap_hours=48.0) measured precision
 1.000, recall 0.632, false merges 0, false splits 7 (almen-river-flood,
 elsby-harbor-storm-closure, varrow-council-budget-vote), unassigned 0.
 Revision 2 (#36) adds the secondary event verifier and measures to the member
-time range; the figures below are revision 2's.
+time range. On the 26-Article corpus it measured 1.000 / 1.000 with 12 Stories.
+#38 added the same-conflict and same-war hard negatives (32 Articles); revision
+2 then measured precision 0.870, recall 0.952 (20/21), false merges 3, false
+splits 1 (korvel-delegation-drone-threat), unassigned 0, 15 Stories: it merged
+both hard negatives through the secondary verifier. Revision 3 (#38) judges the
+nearest member by its own 0.22 bound; the figures below are revision 3's.
 """
 
 import dataclasses
@@ -57,12 +62,13 @@ from tests.news.recorded_embeddings import (
 from tests.news.story_corpus import load_corpus
 from tests.news.story_metrics import evaluate, primary_assignments
 
-# Measured on corpus schema_version 1 with matcher_key
-# story-match-v2;max_distance=0.18;max_time_gap_hours=48.0;
-# secondary_max_distance=0.25;min_anchors=1;max_members=20 and
-# embedding model fastembed:BAAI/bge-small-en-v1.5@52398278842e:
-# precision 1.000, recall 1.000 (19/19), false merges 0, false splits 0,
-# unassigned 0; 12 Stories for 12 events. The inputs are recorded and the order
+# Measured on corpus schema_version 1 (32 Articles, 16 events, 21 same-event
+# pairs) with matcher_key
+# story-match-v3;max_distance=0.18;max_time_gap_hours=48.0;
+# secondary_max_distance=0.25;secondary_max_member_distance=0.22;min_anchors=1;
+# max_members=20 and embedding model fastembed:BAAI/bge-small-en-v1.5@52398278842e:
+# precision 1.000, recall 1.000 (21/21), false merges 0, false splits 0,
+# unassigned 0; 16 Stories for 16 events. The inputs are recorded and the order
 # fixed, so the bounds carry no margin: any new merge or split is a behavior
 # change to re-measure deliberately.
 EXPECTED_MIN_PRECISION = 1.0
@@ -70,7 +76,7 @@ EXPECTED_MIN_RECALL = 1.0
 EXPECTED_MAX_FALSE_MERGES = 0
 EXPECTED_MAX_FALSE_SPLITS = 0
 KNOWN_SPLIT_EVENTS: set[str] = set()
-EXPECTED_STORIES = 12
+EXPECTED_STORIES = 16
 
 
 def publication_order(loaded):
@@ -262,6 +268,63 @@ def test_syndicated_copy_joins_through_matching_evidence_not_duplicate_of(matche
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("first_event", "second_event", "rejected", "story_distance"),
+    [
+        # same_conflict_different_event
+        ("dunmar-collapse-01", "sarran-strikes-02", "sarran-strikes-01", 0.2360),
+        # same_war_technology_different_event
+        (
+            "tarvia-drone-warning-01",
+            "tarvia-delegation-drones-02",
+            "tarvia-delegation-drones-01",
+            0.2267,
+        ),
+    ],
+)
+def test_one_war_two_events_are_rejected_by_member_evidence(
+    matched, first_event, second_event, rejected, story_distance
+):
+    """#38: revision 2 accepted each of these; nothing but the member bound changed."""
+
+    assert separate(matched, [first_event], [rejected, second_event])
+    assert same_story(matched, rejected, second_event)
+    row = StoryArticle.objects.get(article_id=matched.article_ids[rejected])
+    assert row.evidence["reason"] == MatchReason.VERIFICATION_REJECTED
+    (check,) = row.evidence["verification"]
+    # It reaches the verifier: retrieved, time- and language-compatible, above
+    # the primary threshold and inside the candidate bound, sharing one name.
+    assert check["story_id"] == story_of(matched, first_event)
+    assert check["distance"] == pytest.approx(story_distance, abs=1e-4)
+    assert 0.18 < check["distance"] <= 0.25
+    assert check["shared_anchors"] == 1
+    # The Story has one member, so the member distance is the Story distance.
+    assert check["member_distance"] == pytest.approx(check["distance"], abs=1e-6)
+    assert check["result"] == VerificationResult.MEMBER_TOO_FAR
+    # The second report of the rejected event joins it by the primary rule.
+    follow_up = StoryArticle.objects.get(article_id=matched.article_ids[second_event])
+    assert follow_up.evidence["rule"] == MatchRule.PRIMARY_DISTANCE
+
+
+@pytest.mark.django_db
+def test_known_secondary_matches_stay_within_the_member_bound(matched):
+    """The valid secondary joins #38 must keep, including one-anchor ones."""
+
+    joined = {}
+    for fixture_id in ("harbor-storm-03", "varrow-budget-02", "almen-flood-02", "almen-flood-03"):
+        row = StoryArticle.objects.get(article_id=matched.article_ids[fixture_id])
+        assert row.evidence["rule"] == MatchRule.SECONDARY_EVENT_VERIFY, fixture_id
+        (check,) = row.evidence["verification"]
+        joined[fixture_id] = (check["distance"], check["member_distance"], check["shared_anchors"])
+    assert joined["varrow-budget-02"] == pytest.approx((0.188946, 0.188946, 1), abs=1e-6)
+    assert joined["almen-flood-02"] == pytest.approx((0.215232, 0.215232, 1), abs=1e-6)
+    # The Story vector drifted beyond the member bound; a member did not.
+    story_distance, member_distance, anchors = joined["almen-flood-03"]
+    assert member_distance <= 0.22 < story_distance <= 0.25 and anchors == 2
+    assert max(member for _, member, _ in joined.values()) <= 0.22
+
+
+@pytest.mark.django_db
 def test_story_drift_boundary_keeps_the_inquiry_out_of_the_flood(matched):
     flood = ["almen-flood-01", "almen-flood-02", "almen-flood-03"]
     inquiry = ["almen-inquiry-01", "almen-inquiry-02"]
@@ -351,7 +414,11 @@ def test_revision_one_splits_converge_through_reconciliation_and_survive_reproce
         if loaded.corpus.article(loaded.names[article_id]).expected_event in CONVERGENCE_EVENTS
     ]
     # A primary-only policy under its own key reproduces revision 1's decisions.
-    primary_only = dataclasses.replace(matching_module.MATCH_POLICY, secondary_max_distance=0.1801)
+    primary_only = dataclasses.replace(
+        matching_module.MATCH_POLICY,
+        secondary_max_distance=0.1801,
+        secondary_max_member_distance=0.1801,
+    )
     for module in (matching_module, processing_module):
         monkeypatch.setattr(module, "MATCHER_KEY", primary_only.matcher_key)
     monkeypatch.setattr(matching_module, "MATCH_POLICY", primary_only)
@@ -388,4 +455,103 @@ def test_revision_one_splits_converge_through_reconciliation_and_survive_reproce
     again = event_groups(loaded, subset)
     assert all(len(stories) == 1 for stories in again.values()), again
     assert len({next(iter(stories)) for stories in again.values()}) == len(CONVERGENCE_EVENTS)
+    assert StoryArticle.objects.filter(article_id__in=subset).count() == len(subset)
+
+
+# Revision 2's exact key, and its rule: one 0.25 bound for candidate and member.
+REVISION_TWO_KEY = (
+    "story-match-v2;max_distance=0.18;max_time_gap_hours=48.0;"
+    "secondary_max_distance=0.25;min_anchors=1;max_members=20"
+)
+HARD_NEGATIVE_EVENTS = {
+    "veldora-dunmar-collapse-inquiry",
+    "sarran-orlanth-strike-accusation",
+    "estmark-drone-readiness-warning",
+    "korvel-delegation-drone-threat",
+    # Kept in the same run: the secondary joins revision 3 must not undo.
+    "varrow-council-budget-vote",
+    "almen-river-flood",
+    "almen-dam-inquiry",
+}
+
+
+@pytest.mark.django_db
+def test_revision_two_false_merges_are_undone_by_reconciliation_and_survive_reprocessing(
+    monkeypatch,
+):
+    """#38: deploy revision 3 over a database revision 2 matched; the existing
+    stale-key reconciliation rebuilds every assignment, with no migration."""
+
+    monkeypatch.setattr(
+        embeddings_module, "embedding_provider_for", lambda _name: RecordedEmbeddingProvider()
+    )
+    loaded = load_corpus()
+    subset = [
+        article_id
+        for article_id in publication_order(loaded)
+        if loaded.corpus.article(loaded.names[article_id]).expected_event in HARD_NEGATIVE_EVENTS
+    ]
+    revision_two = dataclasses.replace(REAL_POLICY, secondary_max_member_distance=0.25)
+    for module in (matching_module, processing_module):
+        monkeypatch.setattr(module, "MATCHER_KEY", REVISION_TWO_KEY)
+    monkeypatch.setattr(matching_module, "MATCH_POLICY", revision_two)
+    for article_id in subset:
+        process_article(article_id)
+        settle()
+    before = report(loaded)
+    merged = {merge.events for merge in before.false_merges}
+    assert merged == {
+        ("sarran-orlanth-strike-accusation", "veldora-dunmar-collapse-inquiry"),
+        ("estmark-drone-readiness-warning", "korvel-delegation-drone-threat"),
+    }, before.describe()
+    assert set(
+        StoryArticle.objects.filter(article_id__in=subset).values_list("matcher_key", flat=True)
+    ) == {REVISION_TWO_KEY}
+
+    # Deploy revision 3: every revision 2 assignment is now stale under #29.
+    for module in (matching_module, processing_module):
+        monkeypatch.setattr(module, "MATCHER_KEY", MATCHER_KEY)
+    monkeypatch.setattr(matching_module, "MATCH_POLICY", REAL_POLICY)
+    assert MATCHER_KEY != REVISION_TWO_KEY
+    ArticleStoryProcessing.objects.update(updated_at=timezone.now() - timedelta(hours=1))
+    stale = [article_id for article_id in reconciliation_candidates() if article_id in subset]
+    assert stale == sorted(subset)
+    for article_id in stale:
+        process_article(article_id)
+        settle()
+
+    converged = event_groups(loaded, subset)
+    assert all(len(stories) == 1 for stories in converged.values()), converged
+    assert len({next(iter(stories)) for stories in converged.values()}) == len(HARD_NEGATIVE_EVENTS)
+    # The earliest report left the merged Story: rebuilt without it, that
+    # Story's vector is in the band, and no member is within the member bound.
+    for leaving, kept in (
+        ("dunmar-collapse-01", "sarran-strikes-01"),
+        ("tarvia-drone-warning-01", "tarvia-delegation-drones-01"),
+    ):
+        row = StoryArticle.objects.get(article_id=loaded.article_ids[leaving])
+        assert row.evidence["reason"] == MatchReason.VERIFICATION_REJECTED, leaving
+        assert row.evidence["kept_current_story"] is False
+        (check,) = row.evidence["verification"]
+        assert check["story_id"] == story_of(loaded, kept)
+        assert check["result"] == VerificationResult.MEMBER_TOO_FAR
+        assert 0.18 < check["distance"] <= 0.25 and check["member_distance"] > 0.22
+        # The other event's reports stayed in the Story they already formed.
+        stayed = StoryArticle.objects.get(article_id=loaded.article_ids[kept])
+        assert stayed.evidence["kept_current_story"] is True, kept
+    assert set(
+        StoryArticle.objects.filter(article_id__in=subset).values_list("matcher_key", flat=True)
+    ) == {MATCHER_KEY}
+    # Reconciled once, nothing is stale any more.
+    ArticleStoryProcessing.objects.update(updated_at=timezone.now() - timedelta(hours=1))
+    assert not set(reconciliation_candidates()) & set(subset)
+
+    # Operator reprocessing of every Article, in publication order, keeps it.
+    for article_id in subset:
+        reprocess_article(article_id)
+        settle()
+    again = event_groups(loaded, subset)
+    assert again.keys() == converged.keys()
+    assert all(len(stories) == 1 for stories in again.values()), again
+    assert len({next(iter(stories)) for stories in again.values()}) == len(HARD_NEGATIVE_EVENTS)
     assert StoryArticle.objects.filter(article_id__in=subset).count() == len(subset)

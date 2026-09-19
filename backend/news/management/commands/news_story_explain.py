@@ -71,9 +71,11 @@ class Command(BaseCommand):
         write(
             f"decision={explanation.decision} reason={explanation.reason or '-'} "
             f"match_rule={explanation.rule or '-'} "
+            f"kept_current_story={'yes' if explanation.kept_current_story else 'no'} "
             f"chosen_story_id={association.story_id if explanation.decision == 'MATCH' else '-'} "
             f"distance={_number(explanation.distance)} threshold={explanation.threshold} "
             f"secondary_threshold={explanation.secondary_threshold} "
+            f"secondary_member_threshold={explanation.secondary_member_threshold} "
             f"max_time_gap_hours={explanation.max_time_gap_hours} "
             f"candidate_count={explanation.candidate_count}"
         )

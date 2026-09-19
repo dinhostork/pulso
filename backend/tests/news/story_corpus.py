@@ -35,6 +35,8 @@ REQUIRED_SCENARIOS = (
     "high_lexical_overlap_different_event",
     "clearly_unrelated_events",
     "story_drift_boundary",
+    "same_conflict_different_event",
+    "same_war_technology_different_event",
 )
 REQUIRED_FIELDS = frozenset(
     {

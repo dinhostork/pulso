@@ -1,10 +1,10 @@
-"""Story matching persistence against real PostgreSQL/pgvector (#28, #36).
+"""Story matching persistence against real PostgreSQL/pgvector (#28, #36, #38).
 
 Vectors are placed by hand on the unit circle: a Story at angle θ from the
 Article is at cosine distance 1 - cos θ, so 10° (0.015) is well within the
-0.18 threshold, 38° (0.212) and 40° (0.234) are in the secondary band up to
-0.25, 50° (0.357) is beyond it and 70° (0.658) is beyond the 0.5 retrieval
-bound.
+0.18 threshold, 37° (0.201), 38° (0.212) and 41° (0.245) are in the secondary
+band up to 0.25, of which only 41° is beyond the 0.22 member bound, 50° (0.357)
+is beyond the band and 70° (0.658) is beyond the 0.5 retrieval bound.
 """
 
 import json
@@ -164,7 +164,7 @@ def test_nearby_article_joins_the_story_with_persisted_evidence():
 @pytest.mark.django_db
 def test_secondary_band_without_shared_names_starts_a_new_story_and_records_why():
     match(make_article(0))
-    ambiguous = make_article(40)
+    ambiguous = make_article(37)
 
     outcome = match(ambiguous)
 
@@ -172,7 +172,7 @@ def test_secondary_band_without_shared_names_starts_a_new_story_and_records_why(
     assert outcome.decision.reason is MatchReason.VERIFICATION_REJECTED
     association = StoryArticle.objects.get(article=ambiguous)
     evidence = association.evidence
-    distance = 1 - math.cos(math.radians(40))
+    distance = 1 - math.cos(math.radians(37))
     assert evidence["reason"] == MatchReason.VERIFICATION_REJECTED
     assert evidence["rule"] is None
     assert evidence["distance"] == pytest.approx(distance, abs=1e-6)
@@ -219,6 +219,7 @@ def test_secondary_verified_match_records_its_rule_and_keeps_cosine_similarity()
     assert evidence["reason"] == MatchReason.VERIFIED_SAME_EVENT
     assert evidence["rule"] == MatchRule.SECONDARY_EVENT_VERIFY
     assert evidence["secondary_max_distance"] == 0.25
+    assert evidence["secondary_max_member_distance"] == 0.22
     assert evidence["verification"] == [
         {
             "story_id": story_id,
@@ -272,6 +273,46 @@ def test_a_story_vector_near_a_report_no_member_resembles_is_rejected():
     assert check["result"] == VerificationResult.MEMBER_TOO_FAR
     assert check["member_distance"] == pytest.approx(0.5, abs=1e-6)
     assert check["shared_anchors"] == 1
+
+
+@pytest.mark.django_db
+def test_a_member_sharing_a_name_but_beyond_the_member_bound_is_rejected():
+    """#38: inside the candidate band, one shared name, member at 0.245 > 0.22."""
+
+    member = make_article(41, body="Crews reopened the bridge in Tarnholt on Monday.")
+    story = make_story(38, [member])
+    incoming = make_article(0, body="Traffic returned to Tarnholt after the repairs.")
+
+    outcome = match(incoming)
+
+    assert outcome.state is MatchState.CREATED_STORY and outcome.story_id != story.pk
+    evidence = StoryArticle.objects.get(article=incoming).evidence
+    (check,) = evidence["verification"]
+    assert check["story_id"] == story.pk
+    assert check["distance"] == pytest.approx(1 - math.cos(math.radians(38)), abs=1e-6)
+    assert check["result"] == VerificationResult.MEMBER_TOO_FAR
+    assert check["member_distance"] == pytest.approx(1 - math.cos(math.radians(41)), abs=1e-6)
+    assert check["shared_anchors"] == 1
+    assert "tarnholt" not in json.dumps(evidence).lower()
+
+
+@pytest.mark.django_db
+def test_a_drifted_story_vector_is_joined_through_a_close_member():
+    """#38: the candidate is 0.245 away, near the top of the band, but one
+    member is 0.134 away; the member bound, not the candidate bound, decides."""
+
+    member = make_article(30, body="Crews reopened the bridge in Tarnholt on Monday.")
+    story = make_story(41, [member])
+    incoming = make_article(0, body="Traffic returned to Tarnholt after the repairs.")
+
+    outcome = match(incoming)
+
+    assert (outcome.state, outcome.story_id) == (MatchState.MATCHED, story.pk)
+    assert outcome.decision.rule is MatchRule.SECONDARY_EVENT_VERIFY
+    (check,) = StoryArticle.objects.get(article=incoming).evidence["verification"]
+    assert check["distance"] == pytest.approx(1 - math.cos(math.radians(41)), abs=1e-6)
+    assert check["member_distance"] == pytest.approx(1 - math.cos(math.radians(30)), abs=1e-6)
+    assert check["result"] == VerificationResult.ACCEPTED
 
 
 @pytest.mark.django_db
@@ -381,12 +422,14 @@ def test_evidence_is_bounded_identifiers_and_numbers_only():
     assert set(evidence) == {
         "reason",
         "rule",
+        "kept_current_story",
         "distance",
         "candidate_count",
         "candidates",
         "verification",
         "max_distance",
         "secondary_max_distance",
+        "secondary_max_member_distance",
         "max_time_gap_hours",
         "embedding_model_key",
     }

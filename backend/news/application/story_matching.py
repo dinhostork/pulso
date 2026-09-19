@@ -55,6 +55,7 @@ MATCH_POLICY = MatchPolicy(
     max_distance=settings.NEWS_STORY_MATCH_MAX_DISTANCE,
     max_time_gap_hours=settings.NEWS_STORY_MATCH_MAX_TIME_GAP_HOURS,
     secondary_max_distance=settings.NEWS_STORY_MATCH_SECONDARY_MAX_DISTANCE,
+    secondary_max_member_distance=settings.NEWS_STORY_MATCH_SECONDARY_MAX_MEMBER_DISTANCE,
     min_anchors=1,
     max_members=settings.NEWS_STORY_MATCH_VERIFY_MAX_MEMBERS,
 )
@@ -113,13 +114,15 @@ def _evidence(
 
     `rule` is the rule that accepted a MATCH (None when a Story was created);
     `verification` lists the secondary candidates checked, in order, with the
-    decisive values. Anchor terms are publication text and are never stored,
-    only their count.
+    decisive values; `kept_current_story` says a stale assignment stayed in
+    the Story it was leaving because the rule still accepts it (#38). Anchor
+    terms are publication text and are never stored, only their count.
     """
 
     return {
         "reason": decision.reason.value,
         "rule": decision.rule.value if decision.rule else None,
+        "kept_current_story": decision.kept_current_story,
         "distance": decision.distance,
         "candidate_count": len(candidates),
         "candidates": [
@@ -139,6 +142,7 @@ def _evidence(
         ],
         "max_distance": MATCH_POLICY.max_distance,
         "secondary_max_distance": MATCH_POLICY.secondary_max_distance,
+        "secondary_max_member_distance": MATCH_POLICY.secondary_max_member_distance,
         "max_time_gap_hours": MATCH_POLICY.max_time_gap_hours,
         "embedding_model_key": model_key,
     }
@@ -227,11 +231,14 @@ def match_article(
     *,
     model_key: str | None = None,
     logger: ContextLoggerAdapter | None = None,
+    current_story_id: int | None = None,
 ) -> MatchOutcome:
     """Assign the Article to a Story once; replays return the existing assignment.
 
     Requires the Article's embedding for `model_key` (default: the configured
     provider's); a missing one raises `MissingArticleEmbedding` before any write.
+    `current_story_id` is the Story a stale assignment was just removed from
+    (see `news.domain.story_matching`); new Articles never pass one.
     Emits one record each for retrieval, decision and association; a replay
     logs only the association it found, since no decision was made.
     """
@@ -253,10 +260,12 @@ def match_article(
         evidence = gather_evidence(
             article_id,
             model_key,
-            secondary_candidates(snapshot, candidates, MATCH_POLICY),
+            secondary_candidates(snapshot, candidates, MATCH_POLICY, current_story_id),
             MATCH_POLICY,
         )
-        decision = decide_story_match(snapshot, candidates, MATCH_POLICY, evidence)
+        decision = decide_story_match(
+            snapshot, candidates, MATCH_POLICY, evidence, current_story_id
+        )
         _log_decision(log, decision, step_started)
         try:
             with transaction.atomic():

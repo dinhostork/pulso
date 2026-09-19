@@ -58,7 +58,7 @@ from news.application.embeddings import configured_provider, embed_article
 from news.application.story_candidates import MissingArticleEmbedding
 from news.application.story_matching import MATCHER_KEY, StoryNoLongerActive, match_article
 from news.application.story_ports import EmbeddingError, EmbeddingErrorKind
-from news.application.story_refresh import mark_story_stale
+from news.application.story_refresh import mark_story_stale, withdraw_member_vector
 from news.logging import ContextLoggerAdapter, log_step, story_logger
 from news.models import Article, ArticleEmbedding, ArticleStoryProcessing, StoryArticle
 
@@ -253,7 +253,9 @@ def match_step(article_id: int, *, logger: ContextLoggerAdapter | None = None) -
     """Assign the Article's primary Story under the configured pair; idempotent.
 
     An existing primary association made with another matcher policy or
-    embedding model is stale and is replaced in the same transaction. The
+    embedding model is stale and is replaced in the same transaction. Its
+    Story's vector is first rebuilt without the Article, and the Article stays
+    in that Story if the current policy still accepts it (#38). The
     processing row is locked for the duration, so redelivered or concurrent
     executions for one Article serialize here and the later one is a no-op.
     """
@@ -270,13 +272,21 @@ def match_step(article_id: int, *, logger: ContextLoggerAdapter | None = None) -
             if _is_fresh(row, keys):
                 return _result(row, story_id=_primary(article_id).story_id)
             current = _primary(article_id)
+            leaving = None
             if current is not None and (
                 current.matcher_key != keys.matcher_key
                 or current.evidence.get("embedding_model_key") != keys.embedding_model_key
             ):
+                leaving = current.story_id
                 current.delete()
-                mark_story_stale(current.story_id, reason="membership_removed")
-            outcome = match_article(article_id, model_key=keys.embedding_model_key, logger=log)
+                withdraw_member_vector(leaving)
+                mark_story_stale(leaving, reason="membership_removed")
+            outcome = match_article(
+                article_id,
+                model_key=keys.embedding_model_key,
+                logger=log,
+                current_story_id=leaving,
+            )
             row.state = State.MATCHED
             row.embedding_model_key = keys.embedding_model_key
             row.matcher_key = keys.matcher_key
@@ -314,6 +324,7 @@ def reprocess_article(article_id: int, *, logger: ContextLoggerAdapter | None = 
         )
         StoryArticle.objects.filter(article_id=article_id, is_primary=True).delete()
         for story_id in old_story_ids:
+            withdraw_member_vector(story_id)
             mark_story_stale(story_id, reason="membership_removed")
         ArticleEmbedding.objects.filter(article_id=article_id).delete()
         ArticleStoryProcessing.objects.filter(article_id=article_id).delete()

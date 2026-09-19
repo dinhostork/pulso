@@ -20,7 +20,7 @@ Three invariants govern the module:
 
 ## Scope
 
-v0.3 (issues #24–#36) includes Story persistence (#24), a versioned embedding boundary (#25), a repository-owned evaluation corpus (#26), pgvector candidate retrieval (#27), a deterministic matcher (#28, revised by #36), Celery processing, reconciliation and reprocessing (#29), Topics and Entities (#30), source-grounded extractive synthesis (#31), coherent refresh generations (#32), structured logs and operator commands (#33), and end-to-end and quality gates (#34). All of it lives in the existing `backend/news/` module.
+v0.3 (issues #24–#36) includes Story persistence (#24), a versioned embedding boundary (#25), a repository-owned evaluation corpus (#26), pgvector candidate retrieval (#27), a deterministic matcher (#28, revised by #36 and, after v0.3, by #38), Celery processing, reconciliation and reprocessing (#29), Topics and Entities (#30), source-grounded extractive synthesis (#31), coherent refresh generations (#32), structured logs and operator commands (#33), and end-to-end and quality gates (#34). All of it lives in the existing `backend/news/` module.
 
 ## Non-goals
 
@@ -61,7 +61,7 @@ Four identities are kept apart:
 | --- | --- | --- |
 | Publication identity | News Core deduplication (ADR-0010) | `Article`, `duplicate_of` |
 | Semantic similarity | Embedding model | `ArticleEmbedding`, `StoryEmbedding`; cosine distance |
-| Event identity | Matcher v2 | `StoryArticle` with `evidence` |
+| Event identity | Matcher v3 | `StoryArticle` with `evidence` |
 | Derived Story interpretation | Refresh components | Story counters, `StoryTopic`, `StoryEntity`, `StorySynthesis*` |
 
 Similarity is one signal toward event identity, not event identity. Derived interpretation describes an event; it never decides membership.
@@ -72,7 +72,7 @@ Similarity is one signal toward event identity, not event identity. Derived inte
 | --- | --- |
 | `news.domain.embeddings` | Bounded Article embedding input; Story vector as unit-length mean. |
 | `news.domain.stories` | `StoryCandidate`, member time range gap, `member_signature`, language key. |
-| `news.domain.story_matching` | Pure matcher v2: `MatchPolicy`, `decide_story_match`, `secondary_candidates`, `verify_candidate`. |
+| `news.domain.story_matching` | Pure matcher v3: `MatchPolicy`, `decide_story_match`, `secondary_candidates`, `verify_candidate`. |
 | `news.domain.event_anchors` | Capitalization-based proper-name anchors for the secondary verifier. |
 | `news.domain.enrichment` | Name normalization and slugs for Topics/Entities. |
 | `news.application.story_ports` | `EmbeddingProvider`, `TopicExtractor`, `EntityExtractor`, `StorySynthesizer` protocols and error types. |
@@ -97,7 +97,7 @@ Similarity is one signal toward event identity, not event identity. Derived inte
 flowchart TD
     A["Article committed by News Core"] -->|"on_commit: embed_article_story"| E["ArticleEmbedding"]
     E -->|"match_article_story"| R["pgvector candidate retrieval"]
-    R --> D{"matcher v2"}
+    R --> D{"matcher v3"}
     D -->|"primary: distance within 0.18"| M["StoryArticle MATCHED"]
     D -->|"secondary: within 0.25, member evidence, shared name"| M
     D -->|"otherwise"| C["new Story + StoryArticle CREATED_STORY"]
@@ -204,7 +204,7 @@ The application sees only `EmbeddingProvider` (`news/application/story_ports.py`
 
 **Article input** (`article_embedding_input`): title, description and body text, each whitespace-collapsed, blank parts omitted, joined by a blank line, cut to `NEWS_EMBEDDING_MAX_INPUT_CHARS = 2000` code points. Provider calls receive at most `NEWS_EMBEDDING_MAX_BATCH = 32` texts. Every returned vector is checked for count, length and finiteness, and against dimensions already stored for its `model_key`; nothing is truncated or padded.
 
-**Story vector** (`story_vector`): the unit-length element-wise mean of member vectors, computed with `math.fsum` so member order does not matter. At Story creation it is the first member's vector. At refresh, `compute_story_embedding` re-embeds every member from the snapshot's captured text, so a stale `ArticleEmbedding` cannot hide a newer revision; `member_count` records how many members it covers.
+**Story vector** (`story_vector`): the unit-length element-wise mean of member vectors, computed with `math.fsum` so member order does not matter. At Story creation it is the first member's vector. At refresh, `compute_story_embedding` re-embeds every member from the snapshot's captured text, so a stale `ArticleEmbedding` cannot hide a newer revision; `member_count` records how many members it covers. When a member is removed (#38), `withdraw_member_vector` rebuilds it at once from the remaining members' stored `ArticleEmbedding` vectors, unstamped (`member_signature` NULL), until the queued refresh replaces it; see [Reprocessing](#reprocessing).
 
 ## Candidate retrieval
 
@@ -224,7 +224,7 @@ The scan is exact. pgvector's HNSW/IVFFlat indexes need a fixed dimension, which
 
 ## Matching decision
 
-`match_article(article_id)` (`news.application.story_matching`) retrieves candidates, gathers secondary evidence only when needed, calls the pure `decide_story_match` and persists the result in one transaction. The shipped policy is **matcher revision 2** (#36); revision 1 (#28) had only the primary rule.
+`match_article(article_id)` (`news.application.story_matching`) retrieves candidates, gathers secondary evidence only when needed, calls the pure `decide_story_match` and persists the result in one transaction. The shipped policy is **matcher revision 3** (#38). Revision 1 (#28) had only the primary rule; revision 2 (#36) added the secondary verifier with one 0.25 bound for both the candidate and its nearest member; revision 3 gives the member its own, tighter bound.
 
 **Compatibility.** A candidate is compatible when it is `ACTIVE`, shares the Article's primary language subtag, and the Article's event time is within `NEWS_STORY_MATCH_MAX_TIME_GAP_HOURS` of the candidate's member publication range `[first_member_time, last_member_time]`:
 
@@ -240,21 +240,26 @@ Compatible candidates are ordered by (`distance`, `story_id`). Every bound is in
 2. **Secondary event verifier** (`SECONDARY_EVENT_VERIFY`, reason `VERIFIED_SAME_EVENT`): otherwise each compatible candidate with distance at most `NEWS_STORY_MATCH_SECONDARY_MAX_DISTANCE` is verified in order, and the first `ACCEPTED` one is joined. Checks run in a fixed order, each with a rejection result:
    - the Article's language is in `ANCHOR_LANGUAGES` (English only) — else `LANGUAGE_UNSUPPORTED`;
    - member evidence exists — else `NO_MEMBER_EVIDENCE`;
-   - the nearest of the candidate's `NEWS_STORY_MATCH_VERIFY_MAX_MEMBERS` most recent members is itself within the secondary bound — else `MEMBER_TOO_FAR`;
+   - the nearest of the candidate's `NEWS_STORY_MATCH_VERIFY_MAX_MEMBERS` most recent members is itself within the member bound `NEWS_STORY_MATCH_SECONDARY_MAX_MEMBER_DISTANCE` — else `MEMBER_TOO_FAR`;
    - at least `min_anchors = 1` shared proper name — else `NO_SHARED_ANCHOR`.
 3. **New Story**, reason `NO_CANDIDATES`, `NO_COMPATIBLE_CANDIDATE`, `ABOVE_THRESHOLD` (no compatible candidate within the secondary bound) or `VERIFICATION_REJECTED` (every candidate in the band failed). v0.3 still prefers splitting one event over merging two, because a merge mixes the facts of distinct events.
+
+**Candidate distance and member evidence distance** are separate concepts (#38). The candidate bound (0.25) decides which Story vectors are worth verifying; a Story vector is a mean that drifts as members join, so a Story can sit far out in the band while one concrete member is a close report of the event (`almen-flood-03`: Story 0.238, nearest member 0.211). The member bound (0.22) decides whether that nearest member is close enough to confirm the same event. A report that only belongs to the same war, conflict or topic as a Story's member typically lands near the top of the band with a shared name or two (the two real-world false merges were 0.243 and 0.246, one shared name each); the member bound, not the name, rejects it. The member bound is validated to lie in `(0, secondary_max_distance]`.
+
+**Re-deciding a stale assignment** (#38). When a new `matcher_key` or embedding model makes an association stale, `match_step` removes it, rebuilds the Story vector without the Article (`withdraw_member_vector`) and passes that Story to the decision as `current_story_id`. The Article stays there when rules 1–2, applied to that Story alone, still accept it (`kept_current_story = true` in the evidence); otherwise it is decided like a new Article. Without the rebuild, the Article met a vector that still averaged in its own embedding and rejoined by the primary rule (0.04–0.11), so a false merge could never be undone. Without the keep rule, re-matching one Article at a time moved a report to the nearer of two Stories of one event and stranded the first report, which is fresh under the new key and never revisited (the Almen flood chain, recall 0.846). New Articles and operator reprocessing never pass a current Story.
 
 **Anchors** (`news.domain.event_anchors`) come from capitalization alone: a term capitalized at every occurrence in a report, and a *strong* anchor when it also appears capitalized mid-sentence in the description or body. English function words and calendar names are excluded. A name counts as shared when it is strong on one side and capitalized on the other. No named-entity model or word list is involved. Terms are publication text: only their count leaves the matching layer.
 
 **Evidence bounds.** `gather_evidence` runs three queries, only for the candidates the primary rule leaves unresolved: at most 10 candidates × 20 most recent members × 2000 characters of bounded text. Member distances are computed in PostgreSQL.
 
-**Excluded signals.** Matcher v2 never reads `Topic`, `Entity`, `StoryTopic`, `StoryEntity`, `duplicate_of`, `content_fingerprint` or Source identity. Matching works when enrichment has never run.
+**Excluded signals.** The matcher never reads `Topic`, `Entity`, `StoryTopic`, `StoryEntity`, `duplicate_of`, `content_fingerprint` or Source identity. Matching works when enrichment has never run.
 
 | Setting | Value |
 | --- | --- |
 | `NEWS_STORY_MATCH_MAX_DISTANCE` | `0.18` |
 | `NEWS_STORY_MATCH_MAX_TIME_GAP_HOURS` | `48` |
 | `NEWS_STORY_MATCH_SECONDARY_MAX_DISTANCE` | `0.25` |
+| `NEWS_STORY_MATCH_SECONDARY_MAX_MEMBER_DISTANCE` | `0.22` |
 | `NEWS_STORY_MATCH_VERIFY_MAX_MEMBERS` | `20` |
 | `min_anchors` (constant in `MATCH_POLICY`) | `1` |
 
@@ -265,10 +270,19 @@ All values are fixed application constants in `config/common.py`, not environmen
 `MatchPolicy.matcher_key` renders the policy name, rule revision and every decision-changing value:
 
 ```text
+story-match-v3;max_distance=0.18;max_time_gap_hours=48.0;secondary_max_distance=0.25;secondary_max_member_distance=0.22;min_anchors=1;max_members=20
+```
+
+Earlier keys:
+
+```text
+story-match-v1;max_distance=0.18;max_time_gap_hours=48.0
 story-match-v2;max_distance=0.18;max_time_gap_hours=48.0;secondary_max_distance=0.25;min_anchors=1;max_members=20
 ```
 
-Revision 1 was `story-match-v1;max_distance=0.18;max_time_gap_hours=48.0`. Every association and every `ArticleStoryProcessing` row stores the key. Processing compares (`embedding_model_key`, `matcher_key`) with the configured pair; a difference in either makes the Article stale. Deploying revision 2 therefore made every revision 1 assignment eligible for reconciliation, which replaced it once through `match_step` without a migration (`test_revision_one_splits_converge_through_reconciliation_and_survive_reprocessing`).
+Every association and every `ArticleStoryProcessing` row stores the key. Processing compares (`embedding_model_key`, `matcher_key`) with the configured pair; a difference in either makes the Article stale, and reconciliation replaces the assignment once through `match_step`, without a data migration. Revision 2's key already used 113 of the original 128 characters, so migration `0011_widen_matcher_key` widens both `matcher_key` columns to `MAX_MATCHER_KEY_LENGTH = 255` (a PostgreSQL `varchar` length increase, no table rewrite). `MatchPolicy` refuses a policy whose key would not fit.
+
+Both transitions are tested against the corpus: `test_revision_one_splits_converge_through_reconciliation_and_survive_reprocessing` (v1 → v3, splits join) and `test_revision_two_false_merges_are_undone_by_reconciliation_and_survive_reprocessing` (v2's two false merges, stamped with the literal v2 key, separate under v3). After reconciliation nothing is stale, and reprocessing every Article keeps the grouping.
 
 ### Time compatibility in revision 2
 
@@ -281,10 +295,10 @@ Every threshold is calibrated on the [synthetic regression corpus](../../backend
 | Threshold | Corpus evidence |
 | --- | --- |
 | Primary 0.18 | Largest distance with zero false merges and a margin below the nearest different-event pair within the time gap: the templated Kestrel and Almen earthquake bulletins, 15 minutes apart, at 0.192. 0.19 leaves a 0.002 margin; 0.20 merges the earthquakes. Same-event reports above it (Varrow budget pair at 0.188946, reworded harbor report at 0.199 against an unrefreshed Story) are recovered by the secondary rule, not by raising 0.18. |
-| Secondary 0.25 | One cosine threshold cannot separate the events: same-event reports reach 0.215 (Almen flood), while different-event reports sit at 0.192 (the earthquakes) and 0.217–0.230 (the dam inquiry against the merged flood Story). 0.25 sits above the farthest same-event nearest member (0.215, margin 0.035) and below the nearest different-event member that shares a name (0.268, margin 0.018). |
-| Member bound (nearest member within 0.25) | Rejects the dam inquiry: it shares the river's name, but no flood report is closer than 0.268; only the flood Story's centroid drifted toward it. |
+| Secondary candidate 0.25 | One cosine threshold cannot separate the events: same-event reports reach 0.215 (Almen flood), while different-event reports sit at 0.192 (the earthquakes) and 0.217–0.230 (the dam inquiry against the merged flood Story). Kept at 0.25 by #38: lowering it to 0.22 splits `almen-flood-03`, whose Story vector is 0.238 away while its nearest member is 0.211. |
+| Member bound 0.22 (#38) | Measured over every secondary verification of the 32-Article corpus, matcher alone and with refresh. Same event: the farthest accepted nearest member is 0.2152 (`almen-flood-02`). Different events sharing a name: 0.2267 (the Tarvia drone pair), 0.2360 (the Veldora conflict pair), 0.2675 (the dam inquiry). Every bound in [0.2153, 0.2266] scores 1.000 / 1.000; 0.2152 splits the flood; 0.2267, and so the initial 0.23 hypothesis, keeps the drone merge. 0.22 is the two-decimal value in that interval: margins 0.0048 above the farthest same-event member and 0.0067 below the nearest hard negative. Revision 2 used 0.25 here. |
 | 20 recent members | Work cap on secondary evidence (10 × 20 × 2000 characters); every corpus Story is smaller. |
-| ≥ 1 shared name | The earthquake hard negative shares no name (`NO_SHARED_ANCHOR`); the Varrow pair shares one. The Lowmere and Varrow budget votes name different towns. |
+| ≥ 1 shared name | The earthquake hard negative shares no name (`NO_SHARED_ANCHOR`); the Varrow pair shares one. The Lowmere and Varrow budget votes name different towns. Two names instead of one (with the 0.25 member bound) was measured by #38 and rejected: it splits the Varrow, harbor and flood pairs (recall 0.714 matcher alone), and different events of one war can share several names. |
 | 48 h gap | Separates Calloway's reelection announcement (61 h after the budget vote, distance 0.177) from the budget Story, while keeping the harbor follow-up 47 h after the Story's latest member. 72 h merges them. |
 | Retrieval 10 / 0.5 / 168 h | Recall bounds and work caps above every decision bound. The five-months-later Elsby storm is closer than 0.18 to the first storm's Story, but the 168 h window returns no candidate (`candidate_count = 0`), so time, not distance, separates it. |
 
@@ -299,7 +313,7 @@ One call to `match_article` writes at most one Story, one `StoryArticle` and tha
 
 Both mark the Story `STALE` in the same transaction. `StoryArticle.Method.MANUAL` is defined in the enum for a future manual workflow; no v0.3 service or command writes it.
 
-`similarity` is cosine similarity to the chosen Story vector, `1 − distance`, whichever rule accepted the match, and `NULL` for `CREATED_STORY`. It is not a verifier score. `matcher_key` records the policy. `evidence` holds identifiers, enums and numbers only: `reason`, `rule` (`null` on create), the deciding `distance`, `candidate_count`, the nearest five `candidates` (`story_id`, `distance`), up to five secondary `verification` entries (`story_id`, `distance`, `result`, `member_distance`, `members_checked`, `shared_anchors`), `max_distance`, `secondary_max_distance`, `max_time_gap_hours` and `embedding_model_key`. Publication text, including anchor names, is never stored.
+`similarity` is cosine similarity to the chosen Story vector, `1 − distance`, whichever rule accepted the match, and `NULL` for `CREATED_STORY`. It is not a verifier score. `matcher_key` records the policy. `evidence` holds identifiers, enums and numbers only: `reason`, `rule` (`null` on create), `kept_current_story` (#38), the deciding `distance`, `candidate_count`, the nearest five `candidates` (`story_id`, `distance`), up to five secondary `verification` entries (`story_id`, `distance`, `result`, `member_distance`, `members_checked`, `shared_anchors`), `max_distance`, `secondary_max_distance`, `secondary_max_member_distance` (#38), `max_time_gap_hours` and `embedding_model_key`. Publication text, including anchor names, is never stored.
 
 ## Story refresh lifecycle
 
@@ -327,7 +341,7 @@ Readers see the old coherent generation or the new one, never a mixture. Enrichm
 | Trigger | Result |
 | --- | --- |
 | Story created | `ACTIVE`, `STALE` (default). |
-| Association added (`membership_added`) or removed (`membership_removed`) | `STALE`, `refresh_error` cleared, in the membership transaction. |
+| Association added (`membership_added`) or removed (`membership_removed`) | `STALE`, `refresh_error` cleared, in the membership transaction. A removal also rebuilds the Story vector from the remaining members (`withdraw_member_vector`, #38), locking the Story row before its vectors, the order promotion locks in. |
 | News Core applies a new Article revision (`article_revised`) | Every Story containing the Article becomes `STALE` in the revision transaction. |
 | Successful promotion | `CURRENT`; outcome `REFRESHED`. |
 | Compute or promotion failure for the current signature | `FAILED`, `refresh_error = "<step>:<error kind>"`, previous generation kept. |
@@ -471,13 +485,13 @@ The concurrent-first-Article duplicate is an accepted v0.3 limitation, not a hid
 
 | Operation | Entry point | Rebuilds | Never writes |
 | --- | --- | --- | --- |
-| Article reprocessing | `reprocess_article(article_id)`; `news_story_process --article X --reprocess`; `news_story_explain --article X --reprocess` | Deletes the Article's embeddings, primary association and processing row, marks the old Story `STALE`, then embeds and matches again. | `Source`, `SourceEndpoint`, `RawArticle`, `Article`, `IngestionRun` |
-| Pipeline-pair change | Reconciliation after a new `model_key` or `matcher_key` | Re-embeds under the new model, replaces the stale association. | Same |
+| Article reprocessing | `reprocess_article(article_id)`; `news_story_process --article X --reprocess`; `news_story_explain --article X --reprocess` | Deletes the Article's embeddings, primary association and processing row, rebuilds the old Story's vector without it and marks that Story `STALE`, then embeds and matches again as a new Article. | `Source`, `SourceEndpoint`, `RawArticle`, `Article`, `IngestionRun` |
+| Pipeline-pair change | Reconciliation after a new `model_key` or `matcher_key` | Re-embeds under the new model, replaces the stale association: the old Story's vector is rebuilt without the Article, which stays in that Story while the current policy still accepts it (see [Matching decision](#matching-decision)). | Same |
 | Story refresh | `refresh_story(story_id)`; `news_story_refresh`; `news_story --story Y --refresh`; `news_stories --failed --refresh` | Story vector, Topics, Entities, synthesis, counters and window. | Same, plus `StoryArticle` |
 
 An Article revision alone does not re-embed or re-match that Article: its `ArticleEmbedding` and association from the earlier revision remain until reprocessing or a pipeline change. The revision does mark its Stories `STALE`, and refresh embeds every member from the current text.
 
-`test_operator_reprocessing_of_every_article_keeps_the_grouping_and_provenance` reprocesses all 26 corpus Articles in publication order: the 12 active groups are preserved, all five News Core provenance tables are unchanged, and **2 archived empty historical Stories** remain (the two single-Article events leave their original Story when reprocessed). Archived ids are diagnostics, not active event clusters; retrieval excludes them. `test_rebuilding_all_derived_state_reproduces_the_grouping_and_keeps_provenance` deletes every Story-side row and rebuilds identical derived state.
+`test_operator_reprocessing_of_every_article_keeps_the_grouping_and_provenance` reprocesses all 32 corpus Articles in publication order: the 16 active groups are preserved, all five News Core provenance tables are unchanged, and **4 archived empty historical Stories** remain (the four single-Article events leave their original Story when reprocessed). Archived ids are diagnostics, not active event clusters; retrieval excludes them. `test_rebuilding_all_derived_state_reproduces_the_grouping_and_keeps_provenance` deletes every Story-side row and rebuilds identical derived state.
 
 ## Testing and evaluation
 
@@ -488,28 +502,42 @@ The default suite runs offline against real PostgreSQL/pgvector with a DNS guard
 | Pure rules | `test_story_matching_decision.py`, `test_story_models.py` |
 | Services | `test_story_candidates.py`, `test_story_matching.py`, `test_story_matching_concurrency.py`, `test_story_processing.py`, `test_story_refresh.py`, `test_story_enrichment.py`, `test_story_synthesis.py`, `test_story_logging.py`, `test_story_operator_commands.py` |
 | Corpus and metrics | `test_story_corpus.py`, `test_story_metrics.py`, `story_corpus.py`, `story_metrics.py`, `recorded_embeddings.py` |
-| Matcher alone on the corpus (#28, #36) | `test_story_matching_corpus.py` |
+| Matcher alone on the corpus (#28, #36, #38) | `test_story_matching_corpus.py` |
 | Full pipeline (#34) | `test_story_engine_end_to_end.py`, `test_story_quality.py`, driven by `story_pipeline.py` |
 | Real worker (opt-in `celery_smoke`) | `test_story_celery_smoke.py` |
 | Live local model (opt-in `local_embedding`) | recording check in `test_story_matching_corpus.py` |
 
-The [evaluation corpus](../../backend/tests/fixtures/news/stories/README.md) is repository-owned and synthetic: **26 Articles, 12 expected events, 19 same-event pairs**, fictional places and publishers, fixed publication offsets from an anchor date. Ten scenarios cover different Sources, different wording, same topic, same entities, later reporting, a months-later lookalike, a syndicated copy, templated lookalikes, unrelated events and story drift. The default suite replays the local model's recorded vectors (`RecordedEmbeddingProvider`), because the hashing double cannot express corpus semantics; the opt-in `local_embedding` run checks the recording against the live model.
+The [evaluation corpus](../../backend/tests/fixtures/news/stories/README.md) is repository-owned and synthetic: **32 Articles, 16 expected events, 21 same-event pairs**, fictional places and publishers, fixed publication offsets from an anchor date. Twelve scenarios cover different Sources, different wording, same topic, same entities, later reporting, a months-later lookalike, a syndicated copy, templated lookalikes, unrelated events, story drift and, since #38, two events of one war sharing its actors (`same_conflict_different_event`) or its weapon and geography (`same_war_technology_different_event`). The #38 records are synthetic equivalents of two false merges found in a real-world smoke test; no publication text is copied. The default suite replays the local model's recorded vectors (`RecordedEmbeddingProvider`), because the hashing double cannot express corpus semantics; the opt-in `local_embedding` run checks the recording against the live model.
 
 ### Quality history
 
 All figures are pairwise measurements on the **synthetic regression corpus, not production accuracy**.
 
-| Measurement | Precision | Recall | False-merge pairs | False-split pairs | Unassigned | Stories |
-| --- | --- | --- | --- | --- | --- | --- |
-| Matcher v1 (#28), matcher alone | 1.000 | 0.632 (12/19) | 0 | 7 | 0 | — |
-| Pre-#36 full pipeline (v1 + refresh) | 1.000 | 0.789 (15/19) | 0 | 4 | 0 | 15 |
-| Matcher v2 (#36), matcher alone | 1.000 | 1.000 (19/19) | 0 | 0 | 0 | 12 |
-| Final v0.3 full pipeline (#34) | 1.000 | 1.000 (19/19) | 0 | 0 | 0 | 12 |
-| Full pipeline, then every Article reprocessed | 1.000 | 1.000 | 0 | 0 | 0 | 12 active, 2 archived |
+| Measurement | Corpus | Precision | Recall | False-merge pairs | False-split pairs | Unassigned | Stories |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Matcher v1 (#28), matcher alone | 26 | 1.000 | 0.632 (12/19) | 0 | 7 | 0 | — |
+| Pre-#36 full pipeline (v1 + refresh) | 26 | 1.000 | 0.789 (15/19) | 0 | 4 | 0 | 15 |
+| Matcher v2 (#36), matcher alone | 26 | 1.000 | 1.000 (19/19) | 0 | 0 | 0 | 12 |
+| v0.3 full pipeline, matcher v2 (#34) | 26 | 1.000 | 1.000 (19/19) | 0 | 0 | 0 | 12 |
+| Matcher v2, matcher alone | 32 | 0.870 | 0.952 (20/21) | 3 | 1 | 0 | 15 |
+| Full pipeline, matcher v2 | 32 | 0.840 | 1.000 (21/21) | 4 | 0 | 0 | 14 |
+| **Matcher v3 (#38), matcher alone** | 32 | 1.000 | 1.000 (21/21) | 0 | 0 | 0 | 16 |
+| **Full pipeline, matcher v3** | 32 | 1.000 | 1.000 (21/21) | 0 | 0 | 0 | 16 |
+| Full pipeline v3, then every Article reprocessed | 32 | 1.000 | 1.000 | 0 | 0 | 0 | 16 active, 4 archived |
 
-The two v1 rows are historical: they were measured before #36 and are recorded in test docstrings and the corpus README; the v1 policy is no longer the configured one. `test_story_matching_corpus.py` enforces the v2 matcher-alone row and `test_story_quality.py` the full-pipeline row, both with no tolerance: any new merge or split fails with fixture ids, labels and Story ids.
+Every row except the v3 ones is historical, recorded in test docstrings and the corpus README. The two matcher v2 rows on the 32-Article corpus were measured with the #38 hard negatives added and v2 unchanged: v2 merged both, reproducing the smoke-test failure before the matcher changed. `test_story_matching_corpus.py` enforces the v3 matcher-alone row and `test_story_quality.py` the full-pipeline row, both with no tolerance: any new merge or split fails with fixture ids, labels and Story ids.
 
-Revision 1 deliberately preferred false splits to false merges: the Varrow pair, a reworded harbor report and the daily Almen flood reports each started their own Story. Revision 2 added the bounded secondary verifier, which joins them while the earthquake lookalike, the dam inquiry and the months-later storm stay separate. The corpus currently has no false merges or splits; that says nothing about real-world accuracy, where wording, languages and event density differ.
+Revision 1 deliberately preferred false splits to false merges: the Varrow pair, a reworded harbor report and the daily Almen flood reports each started their own Story. Revision 2 added the bounded secondary verifier, which joins them while the earthquake lookalike, the dam inquiry and the months-later storm stay separate. Revision 3 keeps all of that and rejects the two same-war hard negatives by member evidence (`MEMBER_TOO_FAR`, one shared name each). Its only other effect on the corpus is the reason recorded for `lowmere-budget-01`, which is still rejected, now `MEMBER_TOO_FAR` (0.2206) instead of `NO_SHARED_ANCHOR`, because the member check runs first.
+
+**Real-world check (#38).** A local smoke dataset of BBC World, Guardian and Al Jazeera English Articles, matched by v2, was cloned and reconciled under v3 (the dataset is not committed). The Canada/EU proposal coverage stayed one Story (the Guardian report kept its Story; three more BBC reports of the proposal joined it). The Yemen collapse-inquiry / strike-accusation pair and the Latvia drone-readiness / Kyiv-bound officials pair each became two Stories, both rejected as `MEMBER_TOO_FAR` at 0.243111 and 0.245669.
+
+### Known limitations of revision 3
+
+- **Thin, synthetic margins.** The member bound sits 0.0048 above the farthest same-event member and 0.0067 below the nearest hard negative in the corpus. Real same-event coverage between 0.22 and 0.25 whose nearest member is also above 0.22 will now start its own Story; v0.3 prefers that split to a merge, and it converges only if a later report bridges the two.
+- **Distance still carries the decision.** Anchors are a necessary condition, not evidence of the same event: one war's different events share its country, actors and weapons. Two events of one war that are reported in closer wording than the corpus's hard negatives (member below 0.22) will still merge. Separating them needs a signal the matcher does not have (event type, action or date expressions), not another threshold.
+- **Primary rule unchanged.** Below 0.18 no member or name is checked. In the smoke dataset a flash-flood report and a regional weather round-up joined at 0.1785 by the primary rule; #38 does not address primary-rule precision.
+- **Anchors are English-only** and capitalization-based, as in revision 2.
+- **Reconciliation is one Article at a time.** The keep rule prevents stranding a report between two Stories of one event, but reconciliation is still greedy; it is tested on the corpus transitions, not proven for every membership shape.
 
 ## Observability and operator commands
 
@@ -583,6 +611,7 @@ The milestone was planned as issues #24–#35. Where the shipped behavior differ
 | #28: one deterministic decision over distance, time and language, thresholds chosen from the corpus | Matcher revision 2 (#36, added to the milestone): primary distance rule plus a bounded secondary verifier | On the corpus no single cosine threshold separates same-event reports (up to 0.215) from lookalikes (0.192) with zero merges; revision 1 left 7 false-split pairs. |
 | Time proximity to the candidate's member window | Revision 1 measured to the latest member; revision 2 measures to the member range | Reprocessing an early report against a grown Story split it off under revision 1. |
 | Concurrent first reports: either lock or accept duplicates and converge | Accept duplicates; reprocessing converges them | A global event lock would serialize all first reports; the duplicate is bounded and repairable. |
+| After v0.3, #38: secondary verification against real-world hard negatives | Matcher revision 3: a separate 0.22 member bound; on a stale reassignment the old Story's vector is rebuilt without the Article, which stays while the policy still accepts it; `matcher_key` columns widened to 255 | A smoke test merged two events of one war twice through the secondary verifier; the corpus reproduces both under v2. Reconciliation could not undo a merge because the Article met its own contribution in the Story vector. |
 
 Decisions the plan already made and the implementation kept: Topics and Entities are not matcher inputs; one current enrichment set per Story; snapshot/compute/compare-and-swap refresh with no provider work under a lock; no `StoryUpdate` table; no Redis lock; retained non-current synthesis generations; element-level Article provenance for synthesis; `ARCHIVED` rather than deleted zero-member Stories.
 

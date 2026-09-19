@@ -1,14 +1,19 @@
 """Full match + refresh quality on the repository-owned synthetic regression corpus.
 
 The direct matcher gate lives in test_story_matching_corpus.py. Both use the
-existing #26 evaluator, recorded local embeddings and the same 26 Articles /
-12 events / 19 same-event pairs. These are not production accuracy estimates.
+existing #26 evaluator, recorded local embeddings and the same 32 Articles /
+16 events / 21 same-event pairs. These are not production accuracy estimates.
 
-Historical matcher v1 (#28): precision 1.000, recall 0.632 (12/19), zero false
-merges, seven false-split pairs. Pre-#36 full match + refresh: precision 1.000,
-recall 0.789 (15/19), zero false merges, four false-split pairs (Varrow and Almen
-flood). Matcher v2 (#36) now groups all 12 events correctly in both modes:
-precision and recall 1.000, zero false merges/splits/unassigned Articles.
+Historical, on the 26-Article corpus (12 events, 19 pairs): matcher v1 (#28)
+precision 1.000, recall 0.632 (12/19), zero false merges, seven false-split
+pairs; pre-#36 full match + refresh precision 1.000, recall 0.789 (15/19), four
+false-split pairs (Varrow and Almen flood); matcher v2 (#36) 1.000 / 1.000.
+
+#38 added the same-conflict and same-war hard negatives (6 Articles, 4 events,
+2 pairs). Matcher v2 on the expanded corpus, full match + refresh: precision
+0.840, recall 1.000, four false-merge pairs (both hard negatives merged).
+Matcher v3 (#38) groups all 16 events correctly in both modes: precision and
+recall 1.000, zero false merges/splits/unassigned Articles.
 """
 
 import pytest
@@ -23,7 +28,7 @@ from tests.news.story_pipeline import (
 )
 
 # No tolerance: the repository-owned deterministic corpus currently groups all
-# 12 events correctly; any new merge or split is a deliberate behavior change
+# 16 events correctly; any new merge or split is a deliberate behavior change
 # that must be re-measured, not silently tolerated.
 EXPECTED_PRECISION = 1.0
 EXPECTED_RECALL = 1.0
@@ -51,8 +56,8 @@ def report(db, monkeypatch):
 
 @pytest.mark.django_db
 def test_corpus_size_is_the_measured_one(report):
-    assert report.expected_pair_count == 19, report.describe()
-    assert len(report.names) == 26
+    assert report.expected_pair_count == 21, report.describe()
+    assert len(report.names) == 32
 
 
 @pytest.mark.django_db

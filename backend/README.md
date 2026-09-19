@@ -414,7 +414,7 @@ operational reference, in pipeline order:
 | --- | --- | --- |
 | Article vector | [Story embeddings](#story-embeddings) | `embed_article` |
 | Nearby Stories | [Story candidate retrieval](#story-candidate-retrieval) | `find_candidates` |
-| Join or create (matcher v2) | [Story matching](#story-matching) | `match_article` |
+| Join or create (matcher v3) | [Story matching](#story-matching) | `match_article` |
 | Tasks, reconciliation, reprocessing | [Story processing](#story-processing) | `embed_article_story`, `match_article_story`, `reconcile_article_stories` |
 | Topics and Entities | [Story Topics and Entities](#story-topics-and-entities) | `compute_story_enrichment` |
 | Synthesis | [Story synthesis](#story-synthesis) | `compute_story_synthesis` |
@@ -553,7 +553,7 @@ when Story volume makes the exact scan measurably slow.
 ## Story matching
 
 `news.application.story_matching.match_article(article_id)` places one
-embedded Article in a Story (issues #28, #36). It retrieves candidates
+embedded Article in a Story (issues #28, #36, #38). It retrieves candidates
 (above), passes an immutable snapshot and the candidates to the pure rule
 `news.domain.story_matching.decide_story_match`, and persists the result in
 one transaction:
@@ -579,9 +579,12 @@ range (zero inside it). Compatible candidates are ordered by
    first verified one is joined. Verification requires:
    - English (`ANCHOR_LANGUAGES`); other languages go straight to rule 3;
    - one of the candidate's `NEWS_STORY_MATCH_VERIFY_MAX_MEMBERS` most recent
-     members itself within `NEWS_STORY_MATCH_SECONDARY_MAX_DISTANCE` of the
-     Article, so a Story vector cannot pull in a report that no member
-     resembles;
+     members itself within `NEWS_STORY_MATCH_SECONDARY_MAX_MEMBER_DISTANCE`
+     (0.22) of the Article, so a Story vector cannot pull in a report that no
+     member resembles closely. The candidate bound and this member bound are
+     separate since revision 3 (#38): a drifted Story vector may be far out in
+     the band while one member is a close report of the event, and a member
+     that only shares the event's war or topic sits near the top of the band;
    - at least one proper name in common. `news/domain/event_anchors.py`
      derives names from capitalization alone: words capitalized at every
      occurrence and used mid-sentence in the body, excluding English function
@@ -603,17 +606,25 @@ distances are computed in PostgreSQL.
 | `NEWS_STORY_MATCH_MAX_DISTANCE` | `0.18` |
 | `NEWS_STORY_MATCH_MAX_TIME_GAP_HOURS` | `48` |
 | `NEWS_STORY_MATCH_SECONDARY_MAX_DISTANCE` | `0.25` |
+| `NEWS_STORY_MATCH_SECONDARY_MAX_MEMBER_DISTANCE` | `0.22` |
 | `NEWS_STORY_MATCH_VERIFY_MAX_MEMBERS` | `20` |
 
 Every value and the rule revision are part of `MATCHER_KEY`:
 
 ```text
-story-match-v2;max_distance=0.18;max_time_gap_hours=48.0;secondary_max_distance=0.25;min_anchors=1;max_members=20
+story-match-v3;max_distance=0.18;max_time_gap_hours=48.0;secondary_max_distance=0.25;secondary_max_member_distance=0.22;min_anchors=1;max_members=20
 ```
 
 Each association stores it, so #29 reconciliation treats every revision 1
-(`story-match-v1;max_distance=0.18;max_time_gap_hours=48.0`) assignment as
-stale and rebuilds it once through `match_step`. No migration is involved.
+(`story-match-v1;max_distance=0.18;max_time_gap_hours=48.0`) and revision 2
+(`story-match-v2;max_distance=0.18;max_time_gap_hours=48.0;secondary_max_distance=0.25;min_anchors=1;max_members=20`)
+assignment as stale and rebuilds it once through `match_step`. The removed
+association's Story vector is first rebuilt without the Article, and the
+Article stays in that Story while the current policy still accepts it
+(`kept_current_story` in the evidence); otherwise it is decided afresh, which
+is what lets reconciliation undo a revision 2 false merge. No data migration
+is involved; `0011_widen_matcher_key` only widens the `matcher_key` columns to
+255 characters, because revision 3's key no longer fits in 128.
 
 **Why two stages.** On the #26 corpus one cosine threshold cannot separate the
 events. Same-event reports reach 0.215 (the Almen flood). Different-event
@@ -623,21 +634,37 @@ Proper names reject the lookalikes. The member bound rejects the inquiry: it
 shares the river's name, but no flood report is closer than 0.268. The
 rationale and margins are next to the values in `config/common.py`.
 
-**Measured on the #26 corpus** (synthetic regression corpus, 26 Articles,
-12 events, local model `fastembed:BAAI/bge-small-en-v1.5@52398278842e`; not a
-production quality estimate):
+**Why a separate member bound (#38).** A real-world smoke test (BBC World,
+Guardian, Al Jazeera English) merged two different events of one war twice
+through the secondary verifier: member distance 0.243 and 0.246, one shared
+name each. The corpus now holds synthetic equivalents; under revision 2 they
+merge too. Over every secondary verification of the expanded corpus, the
+farthest same-event nearest member is 0.2152 and the nearest different-event
+member sharing a name is 0.2267, so every member bound in [0.2153, 0.2266]
+scores 1.000 / 1.000 and 0.22 was chosen. The initial 0.23 hypothesis keeps
+the drone merge; lowering the candidate bound instead splits the Almen flood;
+two anchors instead of one splits the Varrow, harbor and flood pairs.
 
-| | precision | recall | false merges | false splits | unassigned | Stories |
-| --- | --- | --- | --- | --- | --- | --- |
-| Revision 1, matcher alone (#28) | 1.000 | 0.632 | 0 | 7 pairs | 0 | — |
-| Revision 1, full pipeline with refresh (#34 diagnostics) | 1.000 | 0.789 | 0 | 4 pairs | 0 | 15 |
-| Revision 2, matcher alone | 1.000 | 1.000 | 0 | 0 | 0 | 12 |
-| Revision 2, full pipeline with refresh | 1.000 | 1.000 | 0 | 0 | 0 | 12 |
-| Revision 2, full pipeline, then every Article reprocessed | 1.000 | 1.000 | 0 | 0 | 0 | 12 active (+2 archived empties) |
+**Measured on the #26/#38 corpus** (synthetic regression corpus, local model
+`fastembed:BAAI/bge-small-en-v1.5@52398278842e`; not a production quality
+estimate). The 26-Article corpus had 12 events; #38 added six Articles and
+four events (32 Articles, 16 events, 21 same-event pairs):
+
+| | Articles | precision | recall | false merges | false splits | unassigned | Stories |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Revision 1, matcher alone (#28) | 26 | 1.000 | 0.632 | 0 | 7 pairs | 0 | — |
+| Revision 1, full pipeline with refresh (#34 diagnostics) | 26 | 1.000 | 0.789 | 0 | 4 pairs | 0 | 15 |
+| Revision 2, matcher alone | 26 | 1.000 | 1.000 | 0 | 0 | 0 | 12 |
+| Revision 2, full pipeline with refresh | 26 | 1.000 | 1.000 | 0 | 0 | 0 | 12 |
+| Revision 2, matcher alone | 32 | 0.870 | 0.952 | 3 pairs | 1 pair | 0 | 15 |
+| Revision 2, full pipeline with refresh | 32 | 0.840 | 1.000 | 4 pairs | 0 | 0 | 14 |
+| Revision 3, matcher alone | 32 | 1.000 | 1.000 | 0 | 0 | 0 | 16 |
+| Revision 3, full pipeline with refresh | 32 | 1.000 | 1.000 | 0 | 0 | 0 | 16 |
+| Revision 3, full pipeline, then every Article reprocessed | 32 | 1.000 | 1.000 | 0 | 0 | 0 | 16 active (+4 archived empties) |
 
 `tests/news/test_story_matching_corpus.py` enforces the matcher-alone numbers,
-including convergence of revision 1 splits through reconciliation and their
-stability under reprocessing. The default suite replays the local model's
+including convergence of revision 1 splits and of revision 2's false merges
+through reconciliation, and their stability under reprocessing. The default suite replays the local model's
 recorded corpus vectors offline (`tests/news/recorded_embeddings.py`), because
 the hashing test double cannot express the corpus semantics. The opt-in
 `local_embedding` run checks the recording against the live model.
@@ -989,7 +1016,9 @@ embedding `model_key`. `candidate_count` counts every candidate retrieved;
 only the nearest five are recorded. Since #36 it also holds the `rule` that
 accepted a match, `secondary_max_distance` and the secondary `verification`
 entries, which `news_story_explain` prints as `match_rule`,
-`secondary_threshold` and one line per verified candidate. `fresh=yes` means
+`secondary_threshold` and one line per verified candidate. Since #38 it also
+holds `secondary_max_member_distance` and `kept_current_story`, printed as
+`secondary_member_threshold` and `kept_current_story`. `fresh=yes` means
 the Article is matched under the configured `pipeline_key` and still has its
 primary association.
 

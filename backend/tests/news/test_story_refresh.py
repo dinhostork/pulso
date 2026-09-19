@@ -12,14 +12,21 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from news.application import story_refresh
-from news.application.embeddings import configured_provider
+from news.application.embeddings import configured_provider, embed_article
 from news.application.story_candidates import find_candidates
 from news.application.story_ports import EmbeddingError, EmbeddingErrorKind
 from news.application.story_processing import reprocess_article
-from news.application.story_refresh import RefreshOutcome, mark_story_stale, refresh_story
+from news.application.story_refresh import (
+    RefreshOutcome,
+    mark_story_stale,
+    refresh_story,
+    withdraw_member_vector,
+)
+from news.domain.embeddings import story_vector
 from news.domain.stories import member_signature
 from news.models import (
     Article,
+    ArticleEmbedding,
     IngestionRun,
     RawArticle,
     Source,
@@ -492,3 +499,96 @@ def test_failed_story_is_reachable_from_bounded_operator_sweep():
     story.refresh_from_db()
     assert story.refresh_state == Story.RefreshState.CURRENT
     assert f"story_id={story.pk} outcome=REFRESHED" in output.getvalue()
+
+
+# --- a removed member leaves the Story vector at once (#38) -----------------------------
+
+BODIES = (
+    "Port officials closed the harbor after a storm damaged two piers.",
+    "Fishing boats stayed moored as waves broke over the harbor wall.",
+    "Rail unions announced a strike over pay across the northern network.",
+)
+
+
+def embedded_story():
+    """A refreshed three-member Story whose members have distinct embeddings."""
+
+    story = Story.objects.create(language="en")
+    members = [article(number) for number in (1, 2, 3)]
+    for member, body in zip(members, BODIES, strict=True):
+        Article.objects.filter(pk=member.pk).update(body_text=body)
+        associate(story, member)
+    provider = configured_provider()
+    for member in members:
+        embed_article(member.pk, provider)
+    assert refresh_story(story.pk).outcome == RefreshOutcome.REFRESHED
+    return story, members, provider.identity.model_key
+
+
+def remove(story, member):
+    with transaction.atomic():
+        StoryArticle.objects.filter(story=story, article=member).delete()
+        withdraw_member_vector(story.pk)
+        mark_story_stale(story.pk, reason="membership_removed")
+
+
+def stored_vector(story):
+    return list(StoryEmbedding.objects.get(story=story).vector)
+
+
+@pytest.mark.django_db
+def test_removing_a_member_rebuilds_the_story_vector_from_the_others_until_refresh():
+    story, (first, second, third), model_key = embedded_story()
+    before = stored_vector(story)
+
+    remove(story, third)
+
+    remaining = ArticleEmbedding.objects.filter(
+        article__in=[first, second], model_key=model_key
+    ).values_list("vector", flat=True)
+    embedding = StoryEmbedding.objects.get(story=story)
+    assert list(embedding.vector) == pytest.approx(list(story_vector(list(remaining))))
+    assert list(embedding.vector) != pytest.approx(before)
+    # Unstamped: no longer a generation of any membership, until the refresh.
+    assert (embedding.member_count, embedding.member_signature) == (2, None)
+
+    assert refresh_story(story.pk).outcome == RefreshOutcome.REFRESHED
+    story.refresh_from_db()
+    refreshed = StoryEmbedding.objects.get(story=story)
+    # The refresh computes the same vector from the same members and stamps it.
+    assert list(refreshed.vector) == pytest.approx(list(embedding.vector), abs=1e-6)
+    assert refreshed.member_signature == story.member_signature
+
+
+@pytest.mark.django_db
+def test_without_every_remaining_members_embedding_the_story_vector_is_withdrawn():
+    story, (first, _, third), model_key = embedded_story()
+    ArticleEmbedding.objects.filter(article=first, model_key=model_key).delete()
+
+    remove(story, third)
+
+    assert not StoryEmbedding.objects.filter(story=story).exists()
+    assert refresh_story(story.pk).outcome == RefreshOutcome.REFRESHED
+    assert StoryEmbedding.objects.filter(story=story).count() == 1
+
+
+@pytest.mark.django_db
+def test_an_emptied_story_keeps_its_vector_for_the_refresh_to_archive():
+    story = Story.objects.create(language="en")
+    only = article(1)
+    associate(story, only)
+    embed_article(only.pk, configured_provider())
+    refresh_story(story.pk)
+    before = stored_vector(story)
+
+    remove(story, only)
+
+    assert stored_vector(story) == pytest.approx(before)
+    assert refresh_story(story.pk).outcome == RefreshOutcome.ARCHIVED
+
+
+@pytest.mark.django_db(transaction=True)
+def test_withdrawing_a_member_vector_requires_the_membership_transaction():
+    story, *_ = embedded_story()
+    with pytest.raises(RuntimeError, match="transaction"):
+        withdraw_member_vector(story.pk)
