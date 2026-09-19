@@ -308,9 +308,12 @@ Issue #44 implements this boundary in `mobile/src/api/` and
 `mobile/src/server-state/`. Native fetch accepts approved relative product and
 authentication paths only, normalizes transport/API failures and validates the
 repository contract fixtures. Runtime failures remain visible failures; test
-fixtures never become fallback UI data. Session credential persistence and
-single-flight refresh orchestration remain owned by #45, while exposure queue
-delivery remains owned by #51.
+fixtures never become fallback UI data. Issue #45 implements session
+credential persistence, single-flight refresh, epoch-guarded account isolation
+and protected routing in `mobile/src/session/` (see
+[mobile/README.md](../../mobile/README.md#session-and-sign-in)); its
+`subscribeSessionChanges` hook is the account-change signal for exposure queue
+delivery, which remains owned by #51.
 
 Native Android/iOS reading behavior is the Phase 3 acceptance target. Web must
 continue to compile/render, but production browser CORS and deployment are

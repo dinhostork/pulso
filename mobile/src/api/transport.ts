@@ -8,7 +8,15 @@ const APPROVED_PATH = /^\/api\/[A-Za-z0-9_~./?=&%+-]*$/;
 export interface CredentialHooks {
   accessToken(): string | null;
   sessionEpoch(): number;
-  refreshAfterUnauthorized?(capturedEpoch: number): Promise<string | null>;
+  /**
+   * Called once per request after a 401. `rejectedToken` is the access token
+   * the server refused, so a 401 that arrives after another request already
+   * refreshed can reuse the newer token instead of starting a second refresh.
+   */
+  refreshAfterUnauthorized?(
+    capturedEpoch: number,
+    rejectedToken: string | null,
+  ): Promise<string | null>;
 }
 
 export interface TransportRequest<T> {
@@ -136,11 +144,13 @@ export function createTransport(options: TransportOptions = {}): Transport {
   const origin = options.baseUrl ?? apiBaseUrl;
   const allowInsecureHttp = options.allowInsecureHttp ?? __DEV__;
 
+  const sessionEpoch = () => options.credentials?.sessionEpoch() ?? 0;
+
   async function request<T>(definition: TransportRequest<T>, replayed = false): Promise<T> {
     const method = definition.method ?? "GET";
     const authenticated = definition.authenticated ?? true;
-    const capturedEpoch = options.credentials?.sessionEpoch() ?? 0;
-    const token = authenticated ? options.credentials?.accessToken() : null;
+    const capturedEpoch = sessionEpoch();
+    const token = (authenticated ? options.credentials?.accessToken() : null) ?? null;
     const headers: Record<string, string> = { Accept: "application/json" };
     if (definition.body !== undefined) headers["Content-Type"] = "application/json";
     if (token) headers.Authorization = `Bearer ${token}`;
@@ -163,16 +173,21 @@ export function createTransport(options: TransportOptions = {}): Transport {
       abort.cleanup();
     }
 
+    if (authenticated && sessionEpoch() !== capturedEpoch) {
+      throw new ApiError("stale_session", definition.operation);
+    }
+
     if (
       response.status === 401 &&
       authenticated &&
       !replayed &&
       options.credentials?.refreshAfterUnauthorized
     ) {
-      const refreshed = await options.credentials.refreshAfterUnauthorized(capturedEpoch);
-      if (refreshed && options.credentials.sessionEpoch() === capturedEpoch) {
-        return request(definition, true);
+      const refreshed = await options.credentials.refreshAfterUnauthorized(capturedEpoch, token);
+      if (sessionEpoch() !== capturedEpoch) {
+        throw new ApiError("stale_session", definition.operation);
       }
+      if (refreshed) return request(definition, true);
     }
 
     const body = await responseBody(response, definition.operation);

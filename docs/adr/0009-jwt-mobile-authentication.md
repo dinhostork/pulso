@@ -145,8 +145,26 @@ Logout attempts server revocation, then always clears local credentials,
 account-scoped caches and queued reading interactions even if the network call
 fails. The documented residual access-token validity still applies. Tokens
 must never appear in URLs, public Expo environment variables, query keys,
-logs, diagnostic payloads, or persistent server-state caches. Detailed mobile
-session orchestration remains owned by issue #45.
+logs, diagnostic payloads, or persistent server-state caches.
+
+Issue #45 implements this in `mobile/src/session/`:
+
+- native refresh storage uses `expo-secure-store`; a read/write/delete failure
+  is an explicit retryable state, never a fallback to ordinary storage;
+- every sign-in, restore, expiry and logout starts a new session epoch that
+  clears memory tokens and the previous account's query prefix; late
+  login/refresh/query completions from an earlier epoch are discarded, and a
+  login superseded mid-flight has its refresh token revoked best-effort
+  without storing it;
+- refresh is single-flight per epoch, a request replays at most once, and
+  400/401 from `/api/auth/refresh` is terminal while offline/5xx is retryable;
+- logout reports separately whether remote revocation and local deletion
+  succeeded, and the UI states the residual access validity (up to 15
+  minutes) and, when revocation is unconfirmed, the refresh token's own
+  remaining lifetime.
+
+The state diagram, storage table and web limitation are documented in
+[mobile/README.md](../../mobile/README.md#session-and-sign-in).
 
 ### Logout and residual validity
 

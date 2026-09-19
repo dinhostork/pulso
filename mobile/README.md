@@ -6,8 +6,8 @@
 
 An Expo/TypeScript application shell for Pulso's React Native mobile app. The
 reproducible bootstrap now includes the Phase 3 transport, DTO-decoding and
-server-state boundary, but no Story Feed screen, fake runtime dataset or
-authentication flow. See the [root README](../README.md) for the product this
+server-state boundary plus sign-in and account-isolated sessions, but no Story
+Feed screen or fake runtime dataset. See the [root README](../README.md) for the product this
 shell will eventually host, and
 [docs/architecture/module-boundaries.md](../docs/architecture/module-boundaries.md)
 for backend module ownership.
@@ -104,12 +104,16 @@ default case) so the shell still renders with no `.env` file at all.
 src/
   api/                fetch transport, normalized errors, DTO decoders and API helpers
   app/                expo-router file-based routes; only screens/layouts here
-    _layout.tsx       root layout (single QueryClientProvider, safe area, Stack)
-    index.tsx         the landing screen
-    __tests__/        tests for files in app/ — see note below
+    _layout.tsx       root layout (QueryClientProvider, SessionProvider, safe area, Stack)
+    sign-in.tsx       sign-in / restore-error route
+    (app)/            protected product routes; rendered only for an identified account
+      _layout.tsx     session guard
+      index.tsx       the landing (Feed placeholder) screen
+      __tests__/      tests for files in (app)/ — see note below
   config/
     env.ts            public, build-time-inlined configuration (API base URL)
   server-state/       TanStack Query client, account-scoped keys and retry policy
+  session/            credential storage, session controller, provider and session UI
 assets/               app icon and splash images
 ```
 
@@ -122,10 +126,12 @@ empty 204/205 responses and normalizes timeout/network/abort/HTTP/JSON/DTO
 failures as `ApiError`. It performs no generic retry. Absolute/foreign paths
 are rejected before an Authorization header can reach `fetch`.
 
-Credential hooks expose only access-token lookup, session epoch and one future
-401 refresh/replay operation for issue #45. Tokens do not enter URLs, query
-keys, public Expo variables, diagnostics or persistent storage here. Native
-refresh-token secure storage is deliberately not implemented by #44.
+Credential hooks expose only access-token lookup, session epoch and one 401
+refresh/replay operation, implemented by the session controller (below).
+Tokens do not enter URLs, query keys, public Expo variables, diagnostics or
+persistent query storage. An authenticated response that returns after its
+captured session epoch ended fails as `stale_session` and never reaches a
+decoder or cache.
 
 `src/api/decoders.ts` validates the repository contracts in
 `../docs/contracts/mobile-feed/`; BigAutoField IDs remain decimal strings and
@@ -143,6 +149,77 @@ one replay; the future FeedImpression queue owns delivery retry. Mutations do
 not retry by default, while bookmark features may opt into the exported
 single retry for idempotent writes. Feed data is bounded to ten in-memory
 pages and no query cache is persisted.
+
+## Session and sign-in
+
+Accounts are provisioned locally (there is no registration); see
+[backend local account provisioning](../backend/README.md#local-account-provisioning).
+The server contract is [ADR-0009](../docs/adr/0009-jwt-mobile-authentication.md):
+15-minute access tokens, 14-day non-rotating refresh tokens, blacklisting
+logout.
+
+`src/session/controller.ts` owns the whole lifecycle; React reads it through
+`SessionProvider`/`useSession` (no Redux/Zustand). `src/session/runtime.ts`
+wires one transport to one controller, so product and auth requests share the
+same access token, epoch and refresh.
+
+```mermaid
+stateDiagram-v2
+    [*] --> restoring: app start
+    restoring --> signed_out: no stored refresh token
+    restoring --> authenticated: refresh + /me succeed
+    restoring --> restore_error: offline / 5xx / storage read failure
+    restoring --> signed_out: refresh or /me rejected (expired)
+    restore_error --> restoring: Try again
+    restore_error --> logging_out: Sign out
+    signed_out --> signing_in: submit
+    signing_in --> authenticated: login + store + /me
+    signing_in --> sign_in_error: invalid credentials / unavailable / storage failure
+    sign_in_error --> signing_in: submit
+    authenticated --> signed_out: terminal refresh rejection (expired)
+    authenticated --> logging_out: Sign out
+    logging_out --> signed_out: local credentials and cache cleared
+```
+
+| Credential    | Native (iOS/Android)                             | Web          |
+| ------------- | ------------------------------------------------ | ------------ |
+| Refresh token | `expo-secure-store` (`pulso.session.refresh.v1`) | Memory only  |
+| Access token  | Memory only                                      | Memory only  |
+| Password      | Never stored; cleared from the form on submit    | Never stored |
+
+There is no `AsyncStorage`/`localStorage` fallback: a SecureStore read, write
+or delete failure becomes an explicit, retryable state (`credential_*_failed`)
+instead of an insecure fallback or an endless spinner. **Web limitation:** a
+browser reload loses the session and requires sign-in.
+
+- **Cold restore** reads the refresh token, refreshes, then calls `/me` before
+  any protected screen renders. Offline or 5xx keeps the stored token and shows
+  a retryable restore screen; a 400/401 refresh (invalid, expired or
+  blacklisted) clears it and returns to sign-in.
+- **Refresh** is single-flight per session epoch: parallel 401s share one
+  `/api/auth/refresh`, each request replays at most once, and a 401 for a token
+  that was already replaced reuses the newer token. A repeated 401 after the
+  replay is returned to the caller; query retry ignores 401, so there is no
+  login loop.
+- **Epochs.** Every sign-in, restore, expiry and logout starts a new epoch,
+  clears the in-memory tokens and cancels/removes the previous account's query
+  prefix before the next account's screens render. Late login, refresh or
+  query completions from an older epoch are discarded (`stale_session`); tokens
+  from a login superseded mid-flight are revoked best-effort and never stored.
+  `subscribeSessionChanges` publishes `{epoch, accountId}` (never credentials)
+  for account-scoped delivery such as the future exposure queue.
+- **Logout** attempts `/api/auth/logout` and always clears the stored refresh
+  token, memory tokens and account cache, even if the network call fails. The
+  sign-in screen then states that access issued earlier can stay valid for up
+  to 15 minutes, and — if the server could not confirm revocation — that the
+  removed refresh credential stays valid until its own expiry. A failed
+  SecureStore delete is reported with a retry action.
+- **Return routes.** A signed-out deep link is remembered only if it matches a
+  validated in-app pattern (`/stories/{id}` or `/stories/{id}/sources`); a
+  deliberate logout never carries its screen over to the next account.
+
+Session diagnostics are limited to the state/error codes above; usernames,
+passwords and tokens are never logged.
 
 `src/app` is intentionally the only place route files live, matching
 `expo-router`'s file-based routing convention: adding a new screen means
@@ -187,12 +264,16 @@ All tests run fully offline. In addition to shell/environment coverage, API
 tests exercise origin/path safety, timeout/cancellation, empty responses,
 normalized failures and 401 replay; decoder tests consume the repository JSON
 contracts; server-state tests prove account isolation, retry ownership and the
-page cap.
+page cap. Session tests drive the real transport against a scripted fake of
+the auth endpoints (restore, parallel 401, repeated 401, terminal and transient
+refresh failures, logout failures, storage failures and account-switch races),
+and render the sign-in screen and protected routing with
+`expo-router/testing-library`.
 
 The original bootstrap tests still verify:
 
-- `src/app/__tests__/index.test.tsx` renders the landing screen and asserts its
-  visible text without exposing the API origin.
+- `src/app/(app)/__tests__/index.test.tsx` renders the signed-in landing screen
+  and its sign-out action.
   `@testing-library/react-native`'s `render` is asynchronous (`await
 render(...)`) as of v14; a call site that forgets `await` fails with a
   clear "`render` function has not been called" error rather than a silent
