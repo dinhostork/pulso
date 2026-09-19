@@ -4,11 +4,11 @@
 > at [`docs/development.md`](../docs/development.md) instead; come back here
 > for mobile-specific depth.
 
-An Expo/TypeScript application shell for Pulso's React Native mobile app. This
-is a bootstrap (issue #7): a reproducible shell other mobile issues extend, not
-a product screen. No Story feed, Opinion UI, fake dataset or authentication
-flow is implemented here — see the [root README](../README.md) for the
-product this shell will eventually host, and
+An Expo/TypeScript application shell for Pulso's React Native mobile app. The
+reproducible bootstrap now includes the Phase 3 transport, DTO-decoding and
+server-state boundary, but no Story Feed screen, fake runtime dataset or
+authentication flow. See the [root README](../README.md) for the product this
+shell will eventually host, and
 [docs/architecture/module-boundaries.md](../docs/architecture/module-boundaries.md)
 for backend module ownership.
 
@@ -54,9 +54,9 @@ directly over the local network or an emulator/simulator's loopback network.
 | iOS simulator                | `npx expo start --ios`                    | macOS with Xcode                                                 |
 | Web                          | `npx expo start --web`                    | Nothing extra; runs in a browser                                 |
 
-The shell renders (a single "Pulso" screen) without a running backend: it
-never calls the API on startup, only displays the configured base URL as
-text — see below.
+The shell renders without a running backend and makes no request on startup.
+It does not print the configured origin or use contract fixtures as runtime
+fallback content.
 
 See "Quality and testing" below for the full set of checks (lint, format,
 typecheck, tests) and how to run them without any interactive prompts.
@@ -102,14 +102,47 @@ default case) so the shell still renders with no `.env` file at all.
 
 ```text
 src/
+  api/                fetch transport, normalized errors, DTO decoders and API helpers
   app/                expo-router file-based routes; only screens/layouts here
-    _layout.tsx       root layout (SafeAreaProvider, status bar, Stack)
+    _layout.tsx       root layout (single QueryClientProvider, safe area, Stack)
     index.tsx         the landing screen
     __tests__/        tests for files in app/ — see note below
   config/
     env.ts            public, build-time-inlined configuration (API base URL)
+  server-state/       TanStack Query client, account-scoped keys and retry policy
 assets/               app icon and splash images
 ```
+
+## API and server-state boundary
+
+`src/api/transport.ts` is the only general HTTP transport. It uses native
+`fetch`, accepts approved relative `/api/*` paths, joins them to a validated
+origin, applies a 15-second timeout, propagates caller cancellation, handles
+empty 204/205 responses and normalizes timeout/network/abort/HTTP/JSON/DTO
+failures as `ApiError`. It performs no generic retry. Absolute/foreign paths
+are rejected before an Authorization header can reach `fetch`.
+
+Credential hooks expose only access-token lookup, session epoch and one future
+401 refresh/replay operation for issue #45. Tokens do not enter URLs, query
+keys, public Expo variables, diagnostics or persistent storage here. Native
+refresh-token secure storage is deliberately not implemented by #44.
+
+`src/api/decoders.ts` validates the repository contracts in
+`../docs/contracts/mobile-feed/`; BigAutoField IDs remain decimal strings and
+timestamps/nulls remain their wire values. Invalid server data becomes a
+controlled `malformed_dto` failure—there is no fixture or invented-data
+fallback. Source navigation additionally rejects non-HTTP(S), credentialed and
+literal local/private destinations.
+
+`@tanstack/react-query` 5.103.1 is the sole server-state cache. Its package
+metadata supports React 18/19, including this checkout's React 19.2.3. Every
+viewer-decorated query key starts with the decimal-string account ID; identity
+change cancels/removes that account prefix. Read queries own at most two
+retries for network/timeout, 429 or 5xx failures. Transport owns none; auth owns
+one replay; the future FeedImpression queue owns delivery retry. Mutations do
+not retry by default, while bookmark features may opt into the exported
+single retry for idempotent writes. Feed data is bounded to ten in-memory
+pages and no query cache is persisted.
 
 `src/app` is intentionally the only place route files live, matching
 `expo-router`'s file-based routing convention: adding a new screen means
@@ -150,11 +183,16 @@ backend's Ruff `line-length`); everything else is Prettier's default.
 
 Jest uses the `jest-expo` preset (jsdom-free, React Native-aware
 transforms) with `@testing-library/react-native` for component rendering.
-Both existing tests run fully offline:
+All tests run fully offline. In addition to shell/environment coverage, API
+tests exercise origin/path safety, timeout/cancellation, empty responses,
+normalized failures and 401 replay; decoder tests consume the repository JSON
+contracts; server-state tests prove account isolation, retry ownership and the
+page cap.
+
+The original bootstrap tests still verify:
 
 - `src/app/__tests__/index.test.tsx` renders the landing screen and asserts its
-  visible text ("Pulso", "Mobile application shell", the API base URL
-  line) — the "component tests render the shell" acceptance criterion.
+  visible text without exposing the API origin.
   `@testing-library/react-native`'s `render` is asynchronous (`await
 render(...)`) as of v14; a call site that forgets `await` fails with a
   clear "`render` function has not been called" error rather than a silent

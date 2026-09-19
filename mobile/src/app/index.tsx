@@ -1,13 +1,11 @@
 import { StyleSheet, Text, View } from "react-native";
 
-import { apiBaseUrl } from "@/config/env";
-
 export default function Index() {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Pulso</Text>
       <Text style={styles.subtitle}>Mobile application shell</Text>
-      <Text style={styles.meta}>API base URL: {apiBaseUrl}</Text>
+      <Text style={styles.meta}>Mobile Feed foundation</Text>
     </View>
   );
 }

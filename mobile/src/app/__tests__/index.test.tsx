@@ -8,6 +8,6 @@ describe("Index", () => {
 
     expect(screen.getByText("Pulso")).toBeTruthy();
     expect(screen.getByText("Mobile application shell")).toBeTruthy();
-    expect(screen.getByText(/^API base URL: /)).toBeTruthy();
+    expect(screen.getByText("Mobile Feed foundation")).toBeTruthy();
   });
 });

@@ -248,14 +248,23 @@ origin, times out after 15 seconds, supports caller cancellation, handles empty
 never attached to an absolute foreign URL. Tokens never enter URLs, public
 Expo variables, query keys, logs, or diagnostic payloads.
 
-TanStack Query is the proposed single server-state cache; #44 must verify the
-version against the installed Expo/React stack. Account-scoped keys isolate
-all viewer-decorated payloads. React state/context remains appropriate for
-session and transient UI. There is no persistent query cache.
+TanStack Query 5.103.1 is the implemented single server-state cache; its React
+18/19 peer range covers the checkout's React 19.2.3/Expo 57 stack.
+Account-scoped keys isolate all viewer-decorated payloads. React state/context
+remains appropriate for session and transient UI. There is no persistent query
+cache.
 
 Retry ownership is singular: TanStack Query owns bounded read retry; the auth
 session owns at most one refresh/replay; the future impression queue owns its
 own delivery retry. Transport does not blindly retry POST.
+
+Issue #44 implements this boundary in `mobile/src/api/` and
+`mobile/src/server-state/`. Native fetch accepts approved relative product and
+authentication paths only, normalizes transport/API failures and validates the
+repository contract fixtures. Runtime failures remain visible failures; test
+fixtures never become fallback UI data. Session credential persistence and
+single-flight refresh orchestration remain owned by #45, while exposure queue
+delivery remains owned by #51.
 
 Native Android/iOS reading behavior is the Phase 3 acceptance target. Web must
 continue to compile/render, but production browser CORS and deployment are
