@@ -93,9 +93,12 @@ These engines are logical domain components of the same application. They are **
 
 ## News Engine
 
-The planned News Engine connects publications to event-level Stories. The
-implemented v0.2 News Core currently stops at Article; Story matching,
-embeddings and enrichment begin in v0.3. See the [News Core architecture](docs/architecture/news-core.md).
+The News Engine connects publications to event-level Stories. News Core (v0.2)
+ingests, normalizes and deduplicates publications into Articles. The Story
+Engine (v0.3) embeds each Article, matches it deterministically into a Story,
+and keeps each Story's Topics, Entities and source-grounded synthesis coherent
+with its members. See the [News Core architecture](docs/architecture/news-core.md)
+and the [Story Engine architecture](docs/architecture/story-engine.md).
 
 ```mermaid
 flowchart LR
@@ -106,7 +109,7 @@ flowchart LR
     Embeddings["Embeddings"]
     Clustering["Story Matching"]
     Story["Story"]
-    Enrichment["Summary + Context + Entities"]
+    Enrichment["Topics + Entities + Synthesis"]
 
     Sources --> Raw
     Raw --> Normalize
@@ -430,7 +433,9 @@ See [ADR-0002](docs/adr/0002-postgresql-pgvector.md).
 
 The architecture is designed to support local and external implementations through explicit application boundaries.
 
-Initial experimentation is expected to include open-source embedding and NLP models.
+The v0.3 Story Engine uses an optional local open-source embedding model
+(`BAAI/bge-small-en-v1.5` via fastembed) and deterministic, offline extraction
+and extractive synthesis; no hosted AI API is required.
 
 ### Infrastructure
 
@@ -541,10 +546,12 @@ Publish
 
 ## Project status
 
-> **Current stage: News Core implemented; Story Engine next.**
+> **Current stage: Story Engine implemented; Mobile Feed next.**
 
-The Foundation and News Core are implemented and tested. Story Engine is the
-next architecture milestone; product and UX work continues to evolve.
+The Foundation, News Core and Story Engine are implemented and tested. Story
+grouping quality is measured on a repository-owned synthetic corpus, not on
+production data. Mobile Feed is the next milestone; product and UX work
+continues to evolve.
 
 The wireframes represent the current product hypothesis and are not final visual design.
 
@@ -576,6 +583,8 @@ The repository should not be interpreted as a production-ready application at th
 - deduplication.
 
 ### Phase 2 — Story Engine (v0.3.0)
+
+Implemented; see the [Story Engine architecture](docs/architecture/story-engine.md).
 
 - embeddings;
 - semantic similarity;

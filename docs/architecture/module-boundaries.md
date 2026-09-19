@@ -15,7 +15,7 @@ independent deployable services. This maps
 | `backend/accounts/` | Account identity, Django model integration, initial migration and JWT login/logout/refresh/current-user endpoints (issue #6, ADR-0009) |
 | `backend/database/` | Shared PostgreSQL extension migration; no product models |
 | `backend/diagnostics/` | Temporary Celery/Redis infrastructure diagnostic (issue #4); no product models or domain rules |
-| `backend/news/` | News-owned Source, SourceEndpoint, IngestionRun, RawArticle, Article, Story and StoryArticle persistence; `adapters/` fetch and parse feeds, `application/` runs ingestion, processing and operations, `domain/` holds pure rules, `tasks.py` orchestrates Celery work, `logging.py` supplies context, and management commands provide the operator surface. See the [News Core architecture](news-core.md). |
+| `backend/news/` | News-owned publication persistence (Source, SourceEndpoint, IngestionRun, RawArticle, Article) and the Story Engine (Story, StoryArticle, ArticleEmbedding, StoryEmbedding, ArticleStoryProcessing, Topic, Entity, StoryTopic, StoryEntity and the StorySynthesis tables); `adapters/` fetch and parse feeds and implement the embedding, extraction and synthesis ports, `application/` runs ingestion, processing, Story matching, refresh and operations, `domain/` holds pure rules, `tasks.py` orchestrates Celery work, `logging.py` supplies context, and management commands provide the operator surface. See the [News Core architecture](news-core.md) and the [Story Engine architecture](story-engine.md). |
 
 Accounts uses Django's `AbstractUser` and a database-generated `BigAutoField`
 primary key. Future relationships use `settings.AUTH_USER_MODEL` in model fields
@@ -34,11 +34,17 @@ The rules those services coordinate stay in `domain/` as pure functions —
 `urls.py`, `fingerprints.py`, `identity.py`, `normalization.py` and `dedup.py`
 import no Django, no models and no settings. `tasks.py` implements Celery
 orchestration, `management/commands/` provides operator commands, and
-`logging.py` supplies structured context. Story and StoryArticle persistence
-exists; embeddings, candidate retrieval, matching, enrichment, synthesis and
-Story processing tasks are future work. The
-route registry is the integration point for future HTTP adapters; it must not accumulate domain
-rules.
+`logging.py` supplies structured context. The Story Engine follows the same
+layering: `story_ports.py` defines the embedding, extractor and synthesizer
+protocols; `embeddings.py`, `story_candidates.py`, `story_verification.py`,
+`story_matching.py`, `story_processing.py`, `story_refresh.py`,
+`story_enrichment.py`, `story_synthesis.py` and `story_inspection.py` coordinate
+the use cases; `domain/stories.py`, `story_matching.py`, `event_anchors.py`,
+`embeddings.py` and `enrichment.py` hold its pure rules; `adapters/` supplies
+the local and deterministic embedding providers, the rule-based extractor and
+the extractive synthesizer. See the [Story Engine architecture](story-engine.md).
+The route registry is the integration point for future HTTP adapters; it must
+not accumulate domain rules. No Story HTTP API exists yet.
 
 ## Dependency direction
 
@@ -65,7 +71,7 @@ interface rather than another module's internal models.
 | Module | Owns | Current state |
 | --- | --- | --- |
 | Accounts | Stable user identity and account authentication foundation | User model plus JWT login/logout/refresh/current-user endpoints ([ADR-0009](../adr/0009-jwt-mobile-authentication.md)); no registration or profile fields |
-| News | Source publications, Articles, Stories and source-grounded factual synthesis | Persistence plus RSS/JSON Feed ingestion, deterministic normalization and deterministic deduplication ([ADR-0010](../adr/0010-article-identity-and-deduplication.md)); Story and StoryArticle persistence, where Story associations are derived, reprocessable state that never cascades into Article provenance; Story embeddings, candidate retrieval, matching, enrichment, synthesis and processing tasks planned |
+| News | Source publications, Articles, Stories and source-grounded factual synthesis | News Core: RSS/JSON Feed ingestion, deterministic normalization and deterministic deduplication ([ADR-0010](../adr/0010-article-identity-and-deduplication.md)). Story Engine: versioned Article/Story embeddings, pgvector candidate retrieval, deterministic matcher v2, Article → Story associations, snapshot/compare-and-swap Story refresh, Topics and Entities, extractive source-grounded synthesis, Celery processing, reconciliation, reprocessing and operator commands ([Story Engine architecture](story-engine.md)). Story-side state is derived and rebuildable and never cascades into Article provenance. No Story feed or detail API |
 | Opinion | Human Opinions, declared positions, derived Perspectives and Pulse | Planned; no package or models |
 | Recommendation | Discovery ranking, interests and ranking signals | Planned; no package or models |
 | Moderation | Moderation decisions and eligibility policies, coordinated with content owners | Planned; policies and interfaces remain undecided |
@@ -74,7 +80,8 @@ interface rather than another module's internal models.
 These ownership boundaries preserve the accepted decisions:
 
 - [ADR-0002](../adr/0002-postgresql-pgvector.md): PostgreSQL is the shared primary
-  datastore; pgvector will live alongside relational data. Sharing a database
+  datastore; pgvector lives alongside relational data and holds the Story
+  Engine's Article and Story embeddings. Sharing a database
   does not transfer table ownership. The root Compose stack provides local
   PostgreSQL/pgvector; the `database` infrastructure app enables `vector`
   through a Django migration.
