@@ -241,6 +241,8 @@ The **future Story Engine** may assume Articles are normalized publications, can
 
 It must **not** assume one Article equals one event, `duplicate_of` means same Story, different fingerprints mean different Stories, equal fingerprints imply a shared Source, multiple Articles imply independent reporting, or publication deduplication already performed semantic/event clustering. Its conceptual extension point is `Article → Story candidate/matching → Story`; possible future evidence includes text, publication time, Source, entities/topics, embeddings and duplicate links. None of that Story behavior exists in v0.2.
 
+The Story Engine that shipped in v0.3 is documented in the [Story Engine architecture](story-engine.md). It kept this contract: its matcher uses embeddings, language, publication time and proper-name evidence from member text, and never reads `duplicate_of`, fingerprints, Source identity, Topics or Entities as event evidence.
+
 ```mermaid
 flowchart LR
     subgraph Backend[One backend codebase]

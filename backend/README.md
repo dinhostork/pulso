@@ -401,6 +401,32 @@ the command and the optional weekly schedule apply exactly the same logic. When
 `NEWS_INGESTION_ENABLED` is true, Beat also runs `news-prune-runs` every
 604800 s (weekly) with the same 30-day default.
 
+## Story Engine
+
+The v0.3 Story Engine groups committed Articles into event-level Stories and
+keeps each Story's derived state coherent with its membership. The
+[Story Engine architecture](../docs/architecture/story-engine.md) is the design
+reference: persistence, invariants, failure, concurrency and security model,
+and the corpus evidence behind every threshold. The sections below are the
+operational reference, in pipeline order:
+
+| Stage | Section | Entry point |
+| --- | --- | --- |
+| Article vector | [Story embeddings](#story-embeddings) | `embed_article` |
+| Nearby Stories | [Story candidate retrieval](#story-candidate-retrieval) | `find_candidates` |
+| Join or create (matcher v2) | [Story matching](#story-matching) | `match_article` |
+| Tasks, reconciliation, reprocessing | [Story processing](#story-processing) | `embed_article_story`, `match_article_story`, `reconcile_article_stories` |
+| Topics and Entities | [Story Topics and Entities](#story-topics-and-entities) | `compute_story_enrichment` |
+| Synthesis | [Story synthesis](#story-synthesis) | `compute_story_synthesis` |
+| Coherent derived generation | [Story refresh](#story-refresh) | `refresh_story`, `refresh_story_task` |
+| Logs and operator commands | [Story observability](#story-observability) | `news_stories`, `news_story`, `news_story_explain`, `news_story_backlog` |
+
+Automatic processing is off unless `NEWS_STORY_PROCESSING_ENABLED=true`; every
+stage can also be run synchronously from `manage.py`. The quality gates and
+real-worker smoke are described under
+[backend quality and isolated tests](#backend-quality-and-isolated-tests) and
+[automated real-broker smoke check](#automated-real-broker-smoke-check).
+
 ## Story embeddings
 
 Story matching compares semantic vectors of Articles and Stories (issue #25).
@@ -412,16 +438,20 @@ running the services again reproduces them.
 
 The application sees only the `EmbeddingProvider` protocol
 (`news/application/story_ports.py`); `news/application/embeddings.py`
-provides `embed_article`, `embed_articles` and `embed_story`. Nothing
-dispatches them automatically yet.
+provides `embed_article`, `embed_articles` and `embed_story`, which
+[Story processing](#story-processing) calls for each Article, and
+`compute_story_embedding`, which [Story refresh](#story-refresh) uses to rebuild
+a Story vector from its members' current text.
 
 ### `model_key`
 
 Every stored vector records the identity of the model that produced it as
 `model_key = provider:model@revision`, plus its `dimension`. Vectors are only
 comparable within one `model_key`. A row is created once per
-(`article`/`story`, `model_key`) and later calls return it unchanged; a new
-model or revision gets its own rows and never replaces the old ones. A vector
+(`article`/`story`, `model_key`) and later `embed_*` calls return it
+unchanged; only [Story refresh](#story-refresh) updates a Story's row for the
+configured model in place. A new model or revision gets its own rows and
+never replaces the old ones. A vector
 whose length differs from the model's dimension, or from the dimension already
 stored for that `model_key`, fails with an explicit error naming both
 dimensions: nothing is truncated, padded or stored. Error messages never
@@ -460,7 +490,9 @@ The local model is **optional**. `fastembed` lives in the `embeddings`
 dependency group, which `uv sync --locked`, CI and the Docker image do not
 install. Importing Django or starting the backend never loads or downloads it.
 The adapter only loads files already on disk; without the group or the files,
-embedding fails with a clear error instead of downloading.
+embedding fails with a clear error instead of downloading. Story processing
+records that as a permanent `PROVIDER_FAILED`, so a stack that enables
+`NEWS_STORY_PROCESSING_ENABLED` needs the group and the one-off download below.
 
 To opt in, from `backend/`:
 
@@ -856,6 +888,11 @@ uv run --locked --env-file .env python manage.py news_story_refresh --stale-fail
 ```
 
 The sweep selects Story ids in ascending order and bounds `--limit` to 1–1000.
+There is no Beat entry for Story refresh: reconciliation covers Articles only.
+A `STALE` Story whose refresh message was lost, or any Story marked `STALE`
+while `NEWS_STORY_PROCESSING_ENABLED` is off (for example by a synchronous
+`news_story_process`), is refreshed by its next membership change or by
+`news_story_refresh --stale-failed`.
 
 ## Story observability
 
@@ -1159,8 +1196,9 @@ The stack covers the backend, PostgreSQL/pgvector, Redis/Celery, liveness/
 readiness health endpoints and mobile API authentication. It retains the
 issue #1 custom User and package boundaries. Database runtime validation is
 now possible using Compose; host-only checks still require a reachable
-configured PostgreSQL to verify applied migration history. Mobile, semantic
-features and CI remain separate issues.
+configured PostgreSQL to verify applied migration history. News ingestion and
+the Story Engine are documented above; product HTTP APIs for Stories do not
+exist yet.
 
 See [module boundaries](../docs/architecture/module-boundaries.md).
 
@@ -1296,6 +1334,7 @@ harmless diagnostic task; it introduces no product task.
 | `CELERY_DIAGNOSTIC_BEAT_ENABLED` | Optional, defaults to `false`; only toggle enabling `diagnostics.tasks.diagnostic_ping` on a 30s Beat schedule |
 | `NEWS_INGESTION_ENABLED` | Optional, defaults to `true`; gates the three News Beat entries (see [Worker and Beat](#worker-and-beat)) |
 | `NEWS_POLL_DISPATCH_INTERVAL_SECONDS` | Optional, defaults to `300`; positive integer interval for `news-poll-due-endpoints` |
+| `NEWS_STORY_PROCESSING_ENABLED` | Optional, defaults to `false`; enables after-commit Story task dispatch and the `news-story-reconcile` Beat entry (see [Story processing](#story-processing)) |
 
 `REDIS_PORT` defaults to **6399** on the host to avoid colliding with a
 locally installed Redis on 6379; Compose always uses `redis:6379` between
@@ -1428,8 +1467,9 @@ this transport test complements the recorded-vector corpus quality gate.
 ### Verifying the optional Beat schedule
 
 Beat is profile-gated (`profiles: ["beat"]`) and its diagnostic schedule is
-disabled unless explicitly enabled; neither runs during normal startup, and
-no product schedule exists yet. To verify it locally:
+disabled unless explicitly enabled; neither runs during normal startup. The
+News and Story schedules have their own flags (`NEWS_INGESTION_ENABLED`,
+`NEWS_STORY_PROCESSING_ENABLED`). To verify the diagnostic schedule locally:
 
 ```bash
 docker compose --env-file backend/.env up -d worker
