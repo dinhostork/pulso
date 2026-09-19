@@ -35,6 +35,11 @@ v0.3 deliberately excludes, as future work and not as partial features:
 
 There is no HTTP surface for Stories: the operator surface is `manage.py`. There is no `StoryUpdate` table, no Story history or event-sourcing framework, no manual association workflow, no distributed lock and no hosted AI provider.
 
+Phase 3's planned product read boundary, freshness matrix, DTOs and ownership
+are specified separately in the [Mobile Feed architecture](mobile-feed.md).
+Issue #40 records that contract without changing this currently implemented
+Story Engine behavior; issue #41 owns the News read services.
+
 ## Domain vocabulary
 
 | Concept | Meaning |

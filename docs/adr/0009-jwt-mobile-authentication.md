@@ -127,6 +127,27 @@ sequenceDiagram
     API-->>Mobile: 205 Reset Content
 ```
 
+### Mobile credential lifecycle (Phase 3)
+
+The server-side JWT decision above is unchanged. The native client stores only
+the refresh token in platform secure storage; the access token is memory-only.
+The web build stores both in memory and requires sign-in after reload—there is
+no `localStorage` fallback. Passwords are never persisted.
+
+Cold start loads a refresh token, obtains an access token, then calls
+`/api/auth/me` before exposing protected queries. Concurrent 401 responses
+share one refresh operation; a request is replayed at most once and only while
+its captured session epoch is still current. A terminal refresh rejection
+clears credentials. Connectivity/5xx is retryable and does not misclassify a
+stored refresh token as invalid.
+
+Logout attempts server revocation, then always clears local credentials,
+account-scoped caches and queued reading interactions even if the network call
+fails. The documented residual access-token validity still applies. Tokens
+must never appear in URLs, public Expo environment variables, query keys,
+logs, diagnostic payloads, or persistent server-state caches. Detailed mobile
+session orchestration remains owned by issue #45.
+
 ### Logout and residual validity
 
 Logout blacklists the **refresh token** in PostgreSQL
@@ -328,9 +349,9 @@ starting point, not fixed by this ADR (see Non-goals).
 Risk: the mobile app must store the refresh token (14-day lifetime)
 somewhere a compromised device could read it.
 
-Mitigation: this ADR only defines the backend contract. Secure on-device
-storage (e.g. platform keychain/keystore) is a mobile-issue concern
-(FND-07/FND-08), not resolved here.
+Mitigation: Phase 3 requires secure native platform storage for the refresh
+token, memory-only access tokens, and memory-only web credentials. Issue #45
+implements and tests the adapters and failure behavior.
 
 ### Token blacklist table growth
 
@@ -412,7 +433,8 @@ This ADR does not define:
   tooling, documented in backend/README.md);
 - multi-factor authentication;
 - per-device/session tracking beyond one refresh token per login call;
-- the mobile app's on-device token storage mechanism;
+- provider-specific details of the mobile secure-storage adapter (the lifecycle
+  and security boundary are defined above; implementation belongs to #45);
 - final access/refresh token lifetimes for production (15 minutes / 14
   days are this Foundation stage's starting values, adjustable without a
   new ADR as long as the stateless-access/DB-checked-refresh split holds);

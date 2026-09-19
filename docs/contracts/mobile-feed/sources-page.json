@@ -1,0 +1,27 @@
+{
+  "results": [
+    {
+      "id": "9007199254743993",
+      "title": "Council backs river restoration funding",
+      "canonical_url": "https://one.example.com/river-plan",
+      "source": { "id": "21", "name": "One News", "slug": "one-news" },
+      "published_at": "2026-09-19T08:15:00Z",
+      "first_seen_at": "2026-09-19T08:20:00Z",
+      "byline": "Ana Silva",
+      "duplicate_of_id": null,
+      "is_current_member": true
+    },
+    {
+      "id": "9007199254743994",
+      "title": "River corridor plan passes council vote",
+      "canonical_url": "https://two.example.org/city/river-corridor",
+      "source": { "id": "22", "name": "Two Journal", "slug": "two-journal" },
+      "published_at": null,
+      "first_seen_at": "2026-09-19T09:00:00Z",
+      "byline": null,
+      "duplicate_of_id": null,
+      "is_current_member": true
+    }
+  ],
+  "next_cursor": null
+}

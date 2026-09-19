@@ -1,0 +1,65 @@
+{
+  "examples": [
+    {
+      "status": 400,
+      "body": {
+        "code": "invalid_cursor",
+        "detail": "The cursor is invalid or expired."
+      }
+    },
+    {
+      "status": 400,
+      "body": {
+        "code": "validation_error",
+        "detail": "The request is invalid.",
+        "fields": { "limit": ["Must be between 1 and 50."] }
+      }
+    },
+    {
+      "status": 401,
+      "body": {
+        "code": "not_authenticated",
+        "detail": "Authentication credentials were not provided."
+      }
+    },
+    {
+      "status": 404,
+      "body": {
+        "code": "story_not_found",
+        "detail": "The Story was not found."
+      }
+    },
+    {
+      "status": 409,
+      "body": {
+        "code": "source_context_changed",
+        "detail": "The source list changed; restart pagination."
+      }
+    },
+    {
+      "status": 410,
+      "body": {
+        "code": "story_unavailable",
+        "detail": "This Story is no longer available."
+      }
+    },
+    {
+      "status": 413,
+      "body": {
+        "code": "request_too_large",
+        "detail": "The request body is too large."
+      }
+    },
+    {
+      "status": 429,
+      "body": { "code": "rate_limited", "detail": "Try again later." }
+    },
+    {
+      "status": 500,
+      "body": {
+        "code": "server_error",
+        "detail": "The request could not be completed."
+      }
+    }
+  ]
+}

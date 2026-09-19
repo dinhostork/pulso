@@ -1,0 +1,44 @@
+{
+  "ordering": "story_created_desc_v1",
+  "results": [
+    {
+      "id": "9007199254740993",
+      "language": "pt-BR",
+      "created_at": "2026-09-19T10:00:00Z",
+      "first_published_at": "2026-09-19T08:15:00Z",
+      "last_published_at": "2026-09-19T09:45:00Z",
+      "content_state": "CURRENT",
+      "synthesis_id": "9007199254741993",
+      "synthesized_at": "2026-09-19T10:05:00Z",
+      "title": "City council approves the river restoration plan",
+      "elements": [
+        {
+          "id": "9007199254742993",
+          "kind": "TITLE",
+          "position": 0,
+          "text": "City council approves the river restoration plan",
+          "article_ids": ["9007199254743993", "9007199254743994"]
+        },
+        {
+          "id": "9007199254742994",
+          "kind": "SUMMARY",
+          "position": 0,
+          "text": "The measure funds restoration work along the central river corridor.",
+          "article_ids": ["9007199254743993", "9007199254743995"]
+        },
+        {
+          "id": "9007199254742995",
+          "kind": "CONTEXT",
+          "position": 0,
+          "text": "The proposal followed two years of public hearings.",
+          "article_ids": ["9007199254743994"]
+        }
+      ],
+      "topics": [{ "slug": "environment", "label": "Environment" }],
+      "article_count": 3,
+      "source_count": 2,
+      "viewer": { "bookmarked": false }
+    }
+  ],
+  "next_cursor": "v1.example-signed-opaque-cursor"
+}

@@ -48,6 +48,28 @@ Related architectural decisions:
 - [ADR-0006 — Opinion != Perspective](../adr/0006-opinion-not-equal-perspective.md)
 - [ADR-0007 — Pulse Counts Unique Users](../adr/0007-pulse-counts-unique-users.md)
 - [ADR-0008 — Recommendation Personalizes Discovery, Not Truth](../adr/0008-recommend-stories-not-truth.md)
+- [Mobile Feed architecture and contract](../architecture/mobile-feed.md)
+
+## Phase 3 support boundary
+
+The wireframes below preserve the broader product vision; they are not a list
+of controls to fake in Phase 3. Mobile Feed supports authenticated Feed and
+Saved navigation, Story detail, source lists, external publisher navigation,
+bookmark/save/remove, loading/empty/error/preparing/updating/unavailable
+states, pull-to-refresh and bounded pagination. Feed order is the same factual
+order for every account in this phase.
+
+Phase 3 omits Pulse percentages and participant counts, Opinion and
+`Represents me` actions, Perspectives/counterpoints, search/Explore/Profile
+tabs, sharing, media/images/source logos, audio, event timelines, “key points,”
+and invented “why it matters” content. Empty placeholders for these later
+features must not ship. The supported detail label is “Context”; synthesis and
+publication/first-seen times remain explicitly distinct.
+
+Source count means distinct publisher identities in the stated scope. It does
+not mean independent verification. A one-source Story is valid, and missing
+byline, publication time, Topic, Summary or Context has an explicit absence
+state rather than fabricated copy.
 
 ---
 
@@ -126,6 +148,11 @@ The Story card should prioritize:
 
 The feed is vertically navigated and uses `Story` as its primary unit.
 
+For Phase 3, items 4, 6 and social participation in item 7 are future vision.
+Cards show only persisted title, synthesis Summary/Context preview, Topics,
+publication timing, source/article counts and bookmark state. No media box,
+Pulse preview, recommendation explanation or social action is simulated.
+
 ### Main actions
 
 - open Story;
@@ -134,6 +161,9 @@ The feed is vertically navigated and uses `Story` as its primary unit.
 - give an Opinion;
 - bookmark;
 - share.
+
+Phase 3 implements open Story, view sources and bookmark. Pulse, Opinion and
+share controls remain absent until their owning phases.
 
 ### Related decisions
 
@@ -164,6 +194,11 @@ Typical content includes:
 - sources;
 - Story updates when available;
 - entry point to the Pulse.
+
+Phase 3 implements persisted title, synthesis label/time, ordered Summary and
+Context, related Topics/Entities, citations and current source publications.
+“Key points,” Story updates/timeline and the Pulse entry point shown in the
+vision are later-phase controls and do not receive placeholders.
 
 ### UX rules
 

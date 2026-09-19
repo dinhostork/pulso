@@ -17,6 +17,11 @@ independent deployable services. This maps
 | `backend/diagnostics/` | Temporary Celery/Redis infrastructure diagnostic (issue #4); no product models or domain rules |
 | `backend/news/` | News-owned publication persistence (Source, SourceEndpoint, IngestionRun, RawArticle, Article) and the Story Engine (Story, StoryArticle, ArticleEmbedding, StoryEmbedding, ArticleStoryProcessing, Topic, Entity, StoryTopic, StoryEntity and the StorySynthesis tables); `adapters/` fetch and parse feeds and implement the embedding, extraction and synthesis ports, `application/` runs ingestion, processing, Story matching, refresh and operations, `domain/` holds pure rules, `tasks.py` orchestrates Celery work, `logging.py` supplies context, and management commands provide the operator surface. See the [News Core architecture](news-core.md) and the [Story Engine architecture](story-engine.md). |
 
+The accepted Phase 3 boundary adds a logical `reading` module for private
+Bookmarks and FeedImpressions. It is documented now, but its package and models
+are not implemented by issue #40. See the [Mobile Feed architecture](mobile-feed.md)
+and [ADR-0011](../adr/0011-reading-ownership-and-story-references.md).
+
 Accounts uses Django's `AbstractUser` and a database-generated `BigAutoField`
 primary key. Future relationships use `settings.AUTH_USER_MODEL` in model fields
 and `get_user_model()` at runtime. Username/password and permissions retain
@@ -73,7 +78,8 @@ interface rather than another module's internal models.
 | Accounts | Stable user identity and account authentication foundation | User model plus JWT login/logout/refresh/current-user endpoints ([ADR-0009](../adr/0009-jwt-mobile-authentication.md)); no registration or profile fields |
 | News | Source publications, Articles, Stories and source-grounded factual synthesis | News Core: RSS/JSON Feed ingestion, deterministic normalization and deterministic deduplication ([ADR-0010](../adr/0010-article-identity-and-deduplication.md)). Story Engine: versioned Article/Story embeddings, pgvector candidate retrieval, deterministic matcher v3, Article → Story associations, snapshot/compare-and-swap Story refresh, Topics and Entities, extractive source-grounded synthesis, Celery processing, reconciliation, reprocessing and operator commands ([Story Engine architecture](story-engine.md)). Story-side state is derived and rebuildable and never cascades into Article provenance. No Story feed or detail API |
 | Opinion | Human Opinions, declared positions, derived Perspectives and Pulse | Planned; no package or models |
-| Recommendation | Discovery ranking, interests and ranking signals | Planned; no package or models |
+| Reading | Private Bookmark and FeedImpression lifecycle; feed composition and viewer decoration through News read interfaces | Contract accepted in ADR-0011; implementation begins in Phase 3 issues #42/#43. It never owns shared Story facts or recommendation |
+| Recommendation | Discovery ranking, interests and ranking signals | Planned; no package or models; Phase 3 feed ordering is shared and non-personalized |
 | Moderation | Moderation decisions and eligibility policies, coordinated with content owners | Planned; policies and interfaces remain undecided |
 | Notifications | Notification delivery coordination and provider integration | Planned; no package or models |
 

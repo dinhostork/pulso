@@ -1,0 +1,24 @@
+{
+  "request": {
+    "events": [
+      {
+        "event_id": "4f4bb18e-b0e0-4e7f-8cf8-849b7013fa63",
+        "story_id": "9007199254740993",
+        "feed_session_id": "dd42a0ee-0727-4796-bd11-dba56f1c498b",
+        "position": 0,
+        "surface": "HOME_FEED",
+        "policy_version": 1,
+        "occurred_at": "2026-09-19T10:06:01Z"
+      }
+    ]
+  },
+  "response": {
+    "results": [
+      {
+        "event_id": "4f4bb18e-b0e0-4e7f-8cf8-849b7013fa63",
+        "outcome": "accepted",
+        "code": null
+      }
+    ]
+  }
+}
