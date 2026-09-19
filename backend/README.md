@@ -1215,6 +1215,42 @@ sites. `config.settings_test` permits private targets only to reach the local
 fixture server; development settings still default to denying them. The
 separate real-worker News smoke remains opt-in with `pytest -m celery_smoke`.
 
+The Story Engine end-to-end gate (#34) is
+`tests/news/test_story_engine_end_to_end.py`, supported by `story_pipeline.py`.
+It calls the real application services against PostgreSQL/pgvector, processing
+the #26 corpus in publication order and refreshing after each association.
+It asserts exact membership of **12 active Stories / 26 StoryArticle rows**,
+named same-event and false-merge scenarios, final enrichment and embedding,
+source-grounded synthesis, second-pass idempotency, reprocessing, task
+redelivery and controlled concurrency on separate database connections.
+Reprocessing all Articles preserves the 12 active event groups and leaves
+2 archived empty historical Stories, excluded from candidate retrieval.
+Historical synthesis generations are allowed; current derived state must be
+unique and share the final membership signature. All five News Core provenance
+tables are compared before and after rebuilding/reprocessing.
+
+`tests/news/test_story_quality.py` scores that full pipeline with the existing
+#26 evaluator. On the **repository-owned synthetic regression corpus**, matcher
+v2 (#36) has precision **1.000**, recall **1.000**, false-merge count/rate
+**0 / 0.000**, false-split count/rate **0 / 0.000**, and **0 unassigned**.
+These are exact regression gates: with recorded inputs and deterministic
+execution there is no tolerance; any new split or merge needs deliberate
+re-measurement. Failures identify fixture Article ids, expected event labels,
+actual Story ids and offending pairs. These measurements are not production
+accuracy estimates. Historical v1 and current v2 figures are kept distinct in
+the [corpus README](tests/fixtures/news/stories/README.md#quality-regression-gate).
+
+Run just the #34 gates with:
+
+```bash
+uv run --locked pytest tests/news/test_story_engine_end_to_end.py tests/news/test_story_quality.py
+```
+
+The tests replay `RecordedEmbeddingProvider` vectors with the shipped local
+rule-based extractor and deterministic extractive synthesizer. The existing
+non-loopback DNS guard remains enabled: no model download, hosted API or live
+feed is needed. The separate-worker path is opt-in as documented below.
+
 The root backend `conftest.py` rejects alternate settings, development database
 names/credentials, mirrors and `--no-migrations` before test database setup.
 Use the standard commands above; the guard protects against configuration
@@ -1339,8 +1375,9 @@ not specific to the worker.
 Ordinary `pytest` runs are independent of a running worker: `tests/test_diagnostics.py`
 and `tests/news/test_tasks.py` call the task adapters with `.apply()`
 (synchronous, in-process, no broker). The real-broker checks live in
-`tests/test_celery_smoke.py` (diagnostic ping) and
-`tests/news/test_news_celery_smoke.py` (News ingestion), both marked
+`tests/test_celery_smoke.py` (diagnostic ping),
+`tests/news/test_news_celery_smoke.py` (News ingestion), and
+`tests/news/test_story_celery_smoke.py` (Story processing and refresh), all marked
 `celery_smoke` and excluded from the default run through `pyproject.toml`'s
 `addopts`. They require a separately running worker consuming the same Redis
 instance used by `config.settings_test` (logical DB 1, isolated from
@@ -1379,6 +1416,14 @@ the same loopback for both; a containerized worker would not reach it, so this
 command assumes the host worker used by CI. Stop the background worker
 afterward; it is not part of the normal test suite and does not start
 automatically.
+
+The complete Story smoke (#34) embeds and matches a first Article through
+Redis, promotes its generation in the separate worker, then sends a later
+same-event Article from another Source through the same path and refreshes
+again. It asserts the shared Story, two associations, distinct source count,
+embedding/enrichment/synthesis signatures and member-only synthesis citations
+in PostgreSQL. The isolated worker uses the deterministic embedding provider;
+this transport test complements the recorded-vector corpus quality gate.
 
 ### Verifying the optional Beat schedule
 

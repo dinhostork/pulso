@@ -107,20 +107,24 @@ The loader and metrics are importable modules, not test-local helpers:
   - `primary_assignments(article_ids)` reads an assignment from `StoryArticle`
     primary rows.
 
-A later quality gate looks like this:
+The #34 full-pipeline quality gate uses this evaluator:
 
 ```python
 loaded = load_corpus()
-# ... run Story matching over loaded.article_ids.values() ...
+run_pipeline(publication_order(loaded))  # tests.news.story_pipeline
 report = evaluate(
     loaded.expected_events,
     primary_assignments(loaded.article_ids.values()),
     names=loaded.names,
 )
-assert report.false_merge_rate <= LIMIT, report.describe()
+assert report.precision == report.recall == 1.0, report.describe()
+assert report.false_merge_count == report.false_split_count == 0, report.describe()
+assert report.unassigned_count == 0, report.describe()
 ```
 
-Everything is offline: no HTTP, fixture server, embedding provider or model.
+The loader and evaluator need no HTTP, fixture server, embedding provider or model.
+The pipeline gate replays recorded embeddings and uses local deterministic
+extraction/synthesis under the existing non-loopback DNS guard.
 
 `recorded_local_embeddings.json` is not part of the corpus and holds no ground
 truth. It stores the local embedding model's vectors for the corpus inputs, so
@@ -128,3 +132,39 @@ Story matching tests can replay real embeddings offline
 (`tests/news/recorded_embeddings.py`). Re-record it whenever corpus text
 changes.
 The formulas and zero-denominator rules are documented in `story_metrics.py`.
+
+## Quality regression gate
+
+These measurements describe the **repository-owned synthetic regression
+corpus**, not production accuracy: 26 Articles, 12 expected events and 19
+same-event pairs. The recorded embedding model is
+`fastembed:BAAI/bge-small-en-v1.5@52398278842e`.
+
+| Measurement | Precision | Recall | False-merge pairs | False-split pairs | Unassigned |
+| --- | --- | --- | --- | --- | --- |
+| Historical matcher v1 (#28), direct | 1.000 | 0.632 (12/19) | 0 | 7 | 0 |
+| Historical pre-#36 full match + refresh | 1.000 | 0.789 (15/19) | 0 | 4 | 0 |
+| Current matcher v2 (#36), direct | 1.000 | 1.000 (19/19) | 0 | 0 | 0 |
+| Current full v0.3 match + refresh (#34) | 1.000 | 1.000 (19/19) | 0 | 0 | 0 |
+
+The historical figures were measured before #36 and retained in its results;
+the direct matcher gate is `test_story_matching_corpus.py`, while #34 owns
+`test_story_engine_end_to_end.py` and `test_story_quality.py`. Current
+false-merge and false-split rates are both 0.000. There is no quality margin:
+every deterministic expected event currently groups correctly, so any new
+merge or split must fail with its fixture ids, labels and Story ids visible.
+Never alter labels or recorded vectors to satisfy a failing quality gate.
+
+Matcher v2 joins the formerly split Varrow budget pair and all three Almen
+flood reports. The inquiry stays separate; the Kestrel/Almen earthquake hard
+negative records `VERIFICATION_REJECTED` / `NO_SHARED_ANCHOR`. Exact membership
+checks require 12 active Stories and 26 associations. Reprocessing every
+Article preserves this partition while retaining 2 archived empty historical
+Stories; those are excluded from candidate retrieval and active counts.
+
+The suite also checks reconstruction with News Core provenance unchanged,
+duplicate delivery, current-generation coherence, and the exact controlled
+concurrency outcomes: two simultaneous first reports initially create two
+Stories and converge to one active Story through reprocessing; a refresh of
+an obsolete membership snapshot is discarded before the final generation is
+promoted. Historical non-current synthesis rows are legitimate.
