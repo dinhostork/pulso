@@ -1,6 +1,6 @@
 import { act, fireEvent, screen, waitFor } from "expo-router/testing-library";
 
-import { renderReadingApp, TEST_USERS, testSession } from "@/test-utils/readingApp";
+import { readingProduct, renderReadingApp, TEST_USERS, testSession } from "@/test-utils/readingApp";
 
 import { createWebMemoryRefreshTokenStore } from "../storage";
 
@@ -25,9 +25,9 @@ describe("protected session routing", () => {
   });
 
   it("returns to a validated deep link after sign-in", async () => {
-    const app = await renderReadingApp(testSession(), "/stories/7");
+    const app = await renderReadingApp(testSession(undefined, readingProduct), "/stories/7");
     await signIn("reader");
-    expect(await screen.findByText("Story details")).toBeTruthy();
+    expect(await screen.findByText("Story 7 headline")).toBeTruthy();
     expect(app.pathname()).toBe("/stories/7");
   });
 
@@ -40,11 +40,11 @@ describe("protected session routing", () => {
   });
 
   it("does not carry account A's screen or identity into account B", async () => {
-    const runtime = testSession();
+    const runtime = testSession(undefined, readingProduct);
     const { controller } = runtime;
     const app = await renderReadingApp(runtime, "/stories/7");
     await signIn("reader");
-    await screen.findByText("Story details");
+    await screen.findByText("Story 7 headline");
 
     await act(() => controller.logout());
     expect(await screen.findByText(/You are signed out/)).toBeTruthy();
@@ -52,6 +52,6 @@ describe("protected session routing", () => {
 
     expect(await screen.findByText("Signed in as other")).toBeTruthy();
     expect(app.pathname()).toBe("/");
-    await waitFor(() => expect(screen.queryByText("Story details")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("Story 7 headline")).toBeNull());
   });
 });

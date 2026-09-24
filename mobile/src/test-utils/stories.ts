@@ -81,3 +81,67 @@ export function deferred<T>(): Deferred<T> {
   });
   return { promise, resolve, reject };
 }
+
+export interface ArticleOptions {
+  title?: string;
+  publisher?: string;
+  sourceId?: string;
+  url?: string | null;
+  publishedAt?: string | null;
+  firstSeenAt?: string;
+  byline?: string | null;
+  current?: boolean;
+}
+
+export function sourceArticle(id: string, options: ArticleOptions = {}) {
+  const sourceId = options.sourceId ?? "21";
+  return {
+    id,
+    title: options.title ?? `Article ${id} headline`,
+    canonical_url:
+      options.url === undefined
+        ? `https://publisher${sourceId}.example/articles/${id}`
+        : options.url,
+    source: {
+      id: sourceId,
+      name: options.publisher ?? `Publisher ${sourceId}`,
+      slug: `publisher-${sourceId}`,
+    },
+    published_at: options.publishedAt === undefined ? "2026-09-19T08:15:00Z" : options.publishedAt,
+    first_seen_at: options.firstSeenAt ?? "2026-09-19T08:20:00Z",
+    byline: options.byline ?? null,
+    duplicate_of_id: null,
+    is_current_member: options.current ?? true,
+  };
+}
+
+export interface DetailOptions extends StoryOptions {
+  entities?: { kind: string; display_name: string }[];
+  currentArticles?: number;
+  currentSources?: number;
+  /** Citation rows by Article ID; missing cited IDs get a default current row. */
+  citations?: Record<string, ReturnType<typeof sourceArticle>>;
+}
+
+export function storyDetail(id: string, options: DetailOptions = {}) {
+  const card = storyCard(id, options);
+  const cited = new Set(
+    (card.elements as { article_ids: string[] }[]).flatMap((element) => element.article_ids),
+  );
+  const citations: Record<string, ReturnType<typeof sourceArticle>> = {};
+  for (const articleId of cited) {
+    citations[articleId] = options.citations?.[articleId] ?? sourceArticle(articleId);
+  }
+  return {
+    ...card,
+    entities: options.entities ?? [],
+    current_article_count: options.currentArticles ?? card.article_count,
+    current_source_count: options.currentSources ?? card.source_count,
+    citations,
+    sources_path: `/api/stories/${id}/sources?synthesis_id=${card.synthesis_id}`,
+  };
+}
+
+export function sourcesPage(results: unknown[], nextCursor: string | null = null) {
+  return { results, next_cursor: nextCursor };
+}

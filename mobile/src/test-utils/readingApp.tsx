@@ -3,7 +3,7 @@
  * `expo-router/testing-library`. This file lives outside `src/app` (so it is
  * never a route) and outside `__tests__` (so Jest does not run it as a suite).
  */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import { renderRouter } from "expo-router/testing-library";
 import type { ComponentType } from "react";
@@ -18,9 +18,12 @@ import StoryRoute from "@/app/(app)/stories/[storyId]/index";
 import StorySourcesRoute from "@/app/(app)/stories/[storyId]/sources";
 import NotFoundRoute from "@/app/+not-found";
 import SignInRoute from "@/app/sign-in";
+import { createQueryClient } from "@/server-state/query";
 import { createSessionRuntime, type SessionRuntime } from "@/session/runtime";
 import { SessionProvider } from "@/session/SessionProvider";
 import { createWebMemoryRefreshTokenStore, type RefreshTokenStore } from "@/session/storage";
+
+import { sourceArticle, sourcesPage, storyDetail } from "./stories";
 
 export const TEST_USERS: Record<string, { id: number; password: string }> = {
   reader: { id: 1, password: "secret-a" },
@@ -52,6 +55,18 @@ const defaultProduct: ProductHandler = ({ path }) =>
     ? json(EMPTY_FEED)
     : json({ code: "story_not_found", detail: "The Story was not found." }, 404);
 
+/**
+ * A generic reading API for navigation tests: an empty Feed, and for any
+ * Story ID a current Story titled "Story {id} headline" with one source.
+ */
+export const readingProduct: ProductHandler = ({ path }) => {
+  const match = /^\/api\/stories\/(\d+)(\/sources)?$/.exec(path);
+  if (path === "/api/feed") return json(EMPTY_FEED);
+  if (!match) return json({ code: "not_found", detail: "Not found." }, 404);
+  const [, storyId, sources] = match;
+  return sources ? json(sourcesPage([sourceArticle(`${storyId}01`)])) : json(storyDetail(storyId));
+};
+
 export interface TestRuntime extends SessionRuntime {
   fetch: jest.Mock;
   /** Every product request, in order (auth endpoints excluded). */
@@ -60,8 +75,9 @@ export interface TestRuntime extends SessionRuntime {
 
 /**
  * A session runtime backed by a scripted fake of the auth endpoints and an
- * optional product handler. Queries use production defaults except for read
- * retries (covered by server-state tests), so failures surface immediately.
+ * optional product handler. Queries use the production client defaults except
+ * for read retries (covered by server-state tests), so failures surface
+ * immediately, and garbage collection, which would keep Jest alive.
  */
 export function testSession(
   store: RefreshTokenStore = createWebMemoryRefreshTokenStore(),
@@ -99,8 +115,10 @@ export function testSession(
     productCalls.push(request);
     return product(request);
   });
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { gcTime: Infinity, retry: false }, mutations: { retry: false } },
+  const queryClient = createQueryClient();
+  queryClient.setDefaultOptions({
+    queries: { ...queryClient.getDefaultOptions().queries, gcTime: Infinity, retry: false },
+    mutations: { retry: false },
   });
   const runtime = createSessionRuntime({
     baseUrl: "https://api.example.com",

@@ -139,7 +139,7 @@ describe("SourceRow", () => {
     );
     expect(screen.getByText("Harbor Times")).toBeTruthy();
     expect(screen.getByText("Storm closes port")).toBeTruthy();
-    const open = screen.getByRole("button", { name: "Open publication" });
+    const open = screen.getByRole("button", { name: "Open publication (external site)" });
     expect(open.props.accessibilityHint).toBe("Opens Harbor Times outside Pulso");
     await fireEvent.press(open);
     expect(onOpen).toHaveBeenCalledTimes(1);

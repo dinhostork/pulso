@@ -436,7 +436,13 @@ as one account-scoped infinite query over this contract's cursor chain:
 explicit refresh replaces the chain only on success, automatic refetch
 triggers are off, at most ten pages are retained with an explicit restart at
 the bound, and a geometry-only visibility seam is exposed for #51 (see
-[mobile/README.md](../../mobile/README.md#story-feed)).
+[mobile/README.md](../../mobile/README.md#story-feed)). Issue #49 implements
+Story detail and source screens over the detail/source contracts: element
+citations resolve from detail metadata (including non-members), a 409 source
+context change restarts pagination once and then waits for an explicit
+reload, and publisher links reach the OS browser only after the shared
+`isSafePublisherUrl` rule (see
+[mobile/README.md](../../mobile/README.md#story-details-and-sources)).
 
 Native Android/iOS reading behavior is the Phase 3 acceptance target. Web must
 continue to compile/render, but production browser CORS and deployment are

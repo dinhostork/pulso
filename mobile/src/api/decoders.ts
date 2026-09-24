@@ -1,4 +1,5 @@
 import { DecodeError } from "./errors";
+import { isSafePublisherUrl } from "./urlSafety";
 import type {
   BookmarkResult,
   ContentState,
@@ -92,31 +93,8 @@ function relativeApiPath(value: unknown, path: string): string {
 
 function externalHttpUrl(value: unknown, path: string): string {
   const decoded = string(value, path);
-  let parsed: URL;
-  try {
-    parsed = new URL(decoded);
-  } catch {
-    throw new DecodeError(path, "expected a valid HTTP(S) URL");
-  }
-  if (
-    !["http:", "https:"].includes(parsed.protocol) ||
-    !parsed.hostname ||
-    parsed.username ||
-    parsed.password
-  ) {
-    throw new DecodeError(path, "expected a credential-free HTTP(S) URL");
-  }
-  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (
-    host === "localhost" ||
-    host === "::" ||
-    host === "::1" ||
-    /^f[cd][0-9a-f]{2}:/.test(host) ||
-    host.startsWith("fe80:") ||
-    /^(127\.|10\.|169\.254\.|192\.168\.)/.test(host) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(host)
-  ) {
-    throw new DecodeError(path, "literal local/private destinations are not allowed");
+  if (!isSafePublisherUrl(decoded)) {
+    throw new DecodeError(path, "expected a credential-free public HTTP(S) URL");
   }
   return decoded;
 }

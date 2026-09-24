@@ -6,7 +6,7 @@ import { BackHandler } from "react-native";
 import { openPublisherUrl } from "@/navigation/external";
 import { storyHref } from "@/navigation/routes";
 import { createWebMemoryRefreshTokenStore } from "@/session/storage";
-import { renderReadingApp, TEST_USERS, testSession } from "@/test-utils/readingApp";
+import { readingProduct, renderReadingApp, TEST_USERS, testSession } from "@/test-utils/readingApp";
 
 // expo-router itself uses expo-linking, so only the outbound call is replaced.
 jest.mock("expo-linking", () => ({
@@ -18,7 +18,7 @@ jest.mock("expo-linking", () => ({
 async function signedIn(initialUrl = "/") {
   const store = createWebMemoryRefreshTokenStore();
   await store.write("refresh-reader");
-  const runtime = testSession(store);
+  const runtime = testSession(store, readingProduct);
   const { controller } = runtime;
   const app = await renderReadingApp(runtime, initialUrl);
   await waitFor(() => expect(controller.snapshot().status).toBe("authenticated"));
@@ -87,10 +87,8 @@ describe("reading navigation", () => {
     await screen.findByRole("header", { name: "Feed" });
 
     await act(() => router.push(storyHref("12")));
-    await fireEvent.press(await screen.findByRole("button", { name: "View sources" }));
-    expect(
-      await screen.findByText("The source list is not available in this build yet."),
-    ).toBeTruthy();
+    await fireEvent.press(await screen.findByRole("button", { name: "View current sources" }));
+    expect(await screen.findByTestId("source-1201")).toBeTruthy();
     expect(app.pathname()).toBe("/stories/12/sources");
 
     expect(await pressBack()).toBe(true);
@@ -102,9 +100,7 @@ describe("reading navigation", () => {
   it("returns a cold Story deep link to Feed on back", async () => {
     const pressBack = captureHardwareBack();
     const { app } = await signedIn("/stories/7/sources");
-    expect(
-      await screen.findByText("The source list is not available in this build yet."),
-    ).toBeTruthy();
+    expect(await screen.findByTestId("source-701")).toBeTruthy();
     expect(router.canGoBack()).toBe(true);
 
     expect(await pressBack()).toBe(true);
@@ -114,11 +110,11 @@ describe("reading navigation", () => {
   });
 
   it("resumes a pending Story route after sign-in and still backs out to Feed", async () => {
-    const app = await renderReadingApp(testSession(), "/stories/7");
+    const app = await renderReadingApp(testSession(undefined, readingProduct), "/stories/7");
     await fireEvent.changeText(await screen.findByLabelText("Username"), "reader");
     await fireEvent.changeText(screen.getByLabelText("Password"), TEST_USERS.reader.password);
     await fireEvent.press(screen.getByRole("button", { name: "Sign in" }));
-    expect(await screen.findByText("Story details")).toBeTruthy();
+    expect(await screen.findByText("Story 7 headline")).toBeTruthy();
     expect(app.pathname()).toBe("/stories/7");
 
     await act(() => router.back());
@@ -156,10 +152,10 @@ describe("reading navigation", () => {
 
   it("leaves the in-app route untouched when a publisher page is opened", async () => {
     const { app } = await signedIn("/stories/7/sources");
-    await screen.findByText("The source list is not available in this build yet.");
+    await screen.findByTestId("source-701");
 
     await act(async () => {
-      expect(await openPublisherUrl("https://publisher.example/story")).toBe(true);
+      expect(await openPublisherUrl("https://publisher.example/story")).toBe("opened");
     });
 
     expect(Linking.openURL).toHaveBeenCalledWith("https://publisher.example/story");

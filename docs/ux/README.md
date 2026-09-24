@@ -233,6 +233,14 @@ Context, related Topics/Entities, citations and current source publications.
 “Key points,” Story updates/timeline and the Pulse entry point shown in the
 vision are later-phase controls and do not receive placeholders.
 
+Stale disclosure (#49): an Updating Story keeps its earlier synthesis visible
+under a notice naming the synthesis time, with its citations and the current
+sources listed separately; a Preparing Story shows no summary but its current
+sources. Each summary passage names the publishers it cites, and publications
+open on the publisher's own site in the system browser. The mobile
+[README](../../mobile/README.md#story-details-and-sources) records the full
+hierarchy and source-opening rules.
+
 ### UX rules
 
 - factual content comes before community opinion;
