@@ -31,6 +31,9 @@ export const queryKeys = {
       synthesisId === null ? null : productId(synthesisId, "synthesisId"),
     ] as const,
   bookmarks: (accountId: string) => [...queryKeys.account(accountId), "bookmarks"] as const,
+  /** Mutation key (not a query): every Bookmark write for one Story, from any screen. */
+  bookmarkWrite: (accountId: string, storyId: string) =>
+    [...queryKeys.account(accountId), "bookmark-write", productId(storyId, "storyId")] as const,
 };
 
 export function readRetry(failureCount: number, error: DefaultError): boolean {
@@ -70,8 +73,15 @@ export function nextCursor<T>(page: Page<T>): string | undefined {
   return page.next_cursor ?? undefined;
 }
 
+/**
+ * Drops everything cached for an account that is leaving: its queries and its
+ * mutation records, so a pending or failed write can never surface (or be
+ * resumed) under the next account.
+ */
 export async function clearAccountServerState(client: QueryClient, accountId: string) {
   const queryKey = queryKeys.account(accountId);
+  const mutations = client.getMutationCache();
+  for (const mutation of mutations.findAll({ mutationKey: queryKey })) mutations.remove(mutation);
   await client.cancelQueries({ queryKey });
   client.removeQueries({ queryKey });
 }

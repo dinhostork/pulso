@@ -244,7 +244,12 @@ function FeedContent({
           />
         }
         renderItem={({ item }) => (
-          <StoryCard onOpen={openStory} onOpenSources={openSources} story={item.story} />
+          <StoryCard
+            accountId={accountId}
+            onOpen={openStory}
+            onOpenSources={openSources}
+            story={item.story}
+          />
         )}
         scrollEventThrottle={100}
         style={styles.fill}

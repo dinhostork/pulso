@@ -9,6 +9,7 @@ import { Button } from "@/components/Button";
 import { Screen } from "@/components/Screen";
 import { SourceRow } from "@/components/SourceRow";
 import { ErrorState, LoadingState, StatusLabel } from "@/components/StatusState";
+import { BookmarkButton } from "@/features/bookmarks/BookmarkButton";
 import { openPublisherUrl, type PublisherOpenResult } from "@/navigation/external";
 import { FEED_HREF, parseStoryId, storySourcesHref } from "@/navigation/routes";
 import { useAccountId } from "@/session/SessionProvider";
@@ -165,7 +166,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-function StoryDetailView({ story }: { story: StoryDetail }) {
+function StoryDetailView({ accountId, story }: { accountId: string; story: StoryDetail }) {
   const router = useRouter();
   const { colors } = useTheme();
   const byKind = (kind: StoryElement["kind"]) =>
@@ -205,6 +206,15 @@ function StoryDetailView({ story }: { story: StoryDetail }) {
         </AppText>
       ) : null}
       <AppText variant="title">{story.title}</AppText>
+      <View style={styles.bookmark}>
+        {story.viewer.bookmarked ? <StatusLabel label="Saved" /> : null}
+        <BookmarkButton
+          accountId={accountId}
+          bookmarked={story.viewer.bookmarked}
+          storyId={story.id}
+          testID={`detail-bookmark-${story.id}`}
+        />
+      </View>
       {!preparing ? (
         <AppText tone="muted" variant="caption">
           {synthesisLabel(story.synthesized_at!)}
@@ -283,12 +293,17 @@ export function StoryScreen({ storyIdParam }: { storyIdParam: unknown }) {
   return <StoryDetailContent accountId={accountId} storyId={storyId} />;
 }
 
+/** A read that says the Story is gone outranks earlier cached facts, which are then obsolete. */
+function isGone(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 404 || error.status === 410);
+}
+
 function StoryDetailContent({ accountId, storyId }: { accountId: string; storyId: string }) {
   const detail = useStoryDetail(accountId, storyId);
   return (
     <Screen edges={[...EDGES]}>
-      {detail.data !== undefined ? (
-        <StoryDetailView story={detail.data} />
+      {detail.data !== undefined && !isGone(detail.error) ? (
+        <StoryDetailView accountId={accountId} story={detail.data} />
       ) : detail.isError ? (
         <StoryLoadError error={detail.error} onRetry={() => void detail.refetch()} />
       ) : (
@@ -309,10 +324,11 @@ export function StorySourcesScreen({ storyIdParam }: { storyIdParam: unknown }) 
 
 function StorySourcesContent({ accountId, storyId }: { accountId: string; storyId: string }) {
   const detail = useStoryDetail(accountId, storyId);
+  const readable = detail.data !== undefined && !isGone(detail.error);
   return (
-    <Screen edges={[...EDGES]} scroll={detail.data === undefined}>
-      {detail.data !== undefined ? (
-        <SourceList accountId={accountId} story={detail.data} />
+    <Screen edges={[...EDGES]} scroll={!readable}>
+      {readable ? (
+        <SourceList accountId={accountId} story={detail.data!} />
       ) : detail.isError ? (
         <StoryLoadError error={detail.error} onRetry={() => void detail.refetch()} />
       ) : (
@@ -432,6 +448,7 @@ function SourceList({ accountId, story }: { accountId: string; story: StoryDetai
 
 const styles = StyleSheet.create({
   detail: { gap: spacing.md },
+  bookmark: { gap: spacing.xs },
   notice: { gap: spacing.sm, borderWidth: 1, borderRadius: 8, padding: spacing.sm },
   section: { gap: spacing.sm },
   element: { gap: spacing.xs },

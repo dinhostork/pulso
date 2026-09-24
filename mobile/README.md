@@ -116,7 +116,7 @@ src/
       (tabs)/         the only two tabs
         _layout.tsx   Feed and Saved
         index.tsx     Feed (#48)
-        saved.tsx     Saved (route target for #50)
+        saved.tsx     Saved (#50)
         __tests__/    route tests — see note below
       stories/[storyId]/
         index.tsx     Story details (#49)
@@ -127,6 +127,7 @@ src/
   features/           feature screens rendered by the routes (feed, bookmarks, stories)
     feed/             Feed query/chain, Story card, visibility seam (#48)
     stories/          Story detail and source screens, their queries and labels (#49)
+    bookmarks/        shared bookmark mutation, Saved list query and screen (#50)
     impressions/      FeedImpression policy, qualifier, session adapter and queue (#51)
   navigation/         tab bar, stack, route parsing/hrefs and the external publisher seam
   server-state/       TanStack Query client, account-scoped keys and retry policy
@@ -139,12 +140,11 @@ assets/               app icon and splash images
 ## Navigation and reading UI
 
 Issue #46 establishes navigation and UI primitives; #48 fills the Feed (see
-[Story Feed](#story-feed)) and #49 the Story and source screens (see
-[Story details and sources](#story-details-and-sources)). The Saved route is
-still a **route target** that states plainly that its content is not available
-in this build until #50 replaces its body. No Story, source or bookmark
-content is fabricated, and there are no Pulse, Opinion, profile, explore,
-search, audio or sharing affordances.
+[Story Feed](#story-feed)), #49 the Story and source screens (see
+[Story details and sources](#story-details-and-sources)) and #50 the Saved tab
+and bookmark actions (see [Saved and bookmarks](#saved-and-bookmarks)). No
+Story, source or bookmark content is fabricated, and there are no Pulse,
+Opinion, profile, explore, search, audio or sharing affordances.
 
 | Path                    | Screen                  | Access                   | Back                                  |
 | ----------------------- | ----------------------- | ------------------------ | ------------------------------------- |
@@ -477,6 +477,81 @@ device and iOS simulator, with the backend running and a ready Story:
 4. With no browser able to handle the link (e.g. an emulator without one), the
    row shows "The publication could not be opened on this device."
 
+## Saved and bookmarks
+
+Bookmarks are private server state owned by the backend Reading module
+(`GET /api/bookmarks`, `PUT`/`DELETE /api/bookmarks/{story_id}`). The device
+stores no bookmark list, flag or queue: every "Saved" label and Saved row is
+the account's last server response, and a cold start reads Saved again after
+the session is restored.
+
+### One mutation for every surface
+
+Feed cards, Story details and Saved rows render the same `BookmarkButton`
+over `useBookmark` (`src/features/bookmarks/`). It sends **Save** as an
+idempotent `PUT` and **Remove from Saved** as an idempotent `DELETE`; there
+is no toggle request and no optimistic state.
+
+- **Per-Story serialization.** Writes are keyed by account and Story. While
+  one is pending, that Story's control is busy and disabled on every screen
+  (announced through `accessibilityState.busy`/`disabled`, labelled
+  "Saving…"/"Removing…"); a tap that arrives before the re-render is refused
+  by a synchronous pending check, and the mutation scope queues anything that
+  slips past it. Other Stories stay writable.
+- **Confirmed state only.** On a 2xx the confirmed state is written into the
+  account's Feed pages and Story detail cache (only the page that holds the
+  Story changes), the row is dropped from loaded Saved pages on removal, and
+  Saved is invalidated so new rows and order come from the server. The Feed
+  order never changes.
+- **Ambiguous results.** A timeout, network failure, 5xx or broken 2xx body
+  may hide a committed write, so the Story detail is read again
+  (`viewer.bookmarked`). If the read shows the intended state, the change is
+  reported as done because the server confirmed it; otherwise the control
+  says "This Story was not saved/removed" or, when the read also fails,
+  "Pulso could not confirm whether …". Either way it offers "Try saving
+  again"/"Try removing again", which repeats the **same** intended request.
+  Repeating is safe: PUT keeps the original `saved_at`, DELETE of an absent
+  Bookmark is still 204. Nothing retries on its own and nothing is queued
+  offline.
+- **Definitive answers.** 429 asks the reader to wait; 400 reports the write
+  as not applied; 404/410 on save explain that the Story cannot be saved and
+  re-read the detail, which then shows "Story unavailable" instead of
+  obsolete facts.
+- **Account boundary.** Keys start with the account ID. Every session
+  transition removes the leaving account's queries and bookmark mutation
+  records; a write that returns after the transition fails as
+  `stale_session` and touches no cache; mutations use `networkMode: "always"`
+  so none is ever paused and resumed later under another account.
+
+Bookmarking is not a vote, position, "Represents me", popularity signal or
+recommendation reward; it creates no FeedImpression and does not alter the
+Feed.
+
+### Saved tab
+
+`/saved` is one account-scoped infinite query over the server's Saved cursor
+chain (newest save first). Rows are keyed by Story ID; a Story repeated on a
+later page keeps its first slot.
+
+| State                      | Shown                                                                          |
+| -------------------------- | ------------------------------------------------------------------------------ |
+| First load                 | "Loading saved Stories"                                                        |
+| First-load failure         | "Saved unavailable" with Try again                                             |
+| Empty (incl. last removal) | "No saved Stories" with Refresh                                                |
+| AVAILABLE                  | The Feed's Story card, including its "Preparing"/"Updating" label              |
+| UNAVAILABLE                | Tombstone: "Unavailable" label, saved time and Remove from Saved; no synthesis |
+| Pull-to-refresh            | New chain; replaces the rows only when its first page arrives                  |
+| Refresh failure            | Notice above the earlier rows with "Try refreshing again"                      |
+| Next page / failure / end  | Footer progress; "Try again" keeping loaded rows; "You have reached the end"   |
+| Expired cursor             | "Reload Saved"                                                                 |
+
+An unavailable (archived or emptied) Story stays a tombstone until the reader
+removes it; it is never moved to another Story ID, and removing it affects no
+other Story. Removing a row keeps the current route and the other rows'
+positions; loaded page cursors remain valid because the server's keyset cursor
+does not depend on the removed row. Saved rows carry no visibility tracking,
+so Saved never reports FeedImpressions.
+
 ## API and server-state boundary
 
 `src/api/transport.ts` is the only general HTTP transport. It uses native
@@ -507,8 +582,9 @@ viewer-decorated query key starts with the decimal-string account ID; identity
 change cancels/removes that account prefix. Read queries own at most two
 retries for network/timeout, 429 or 5xx failures. Transport owns none; auth owns
 one replay; the future FeedImpression queue owns delivery retry. Mutations do
-not retry by default, while bookmark features may opt into the exported
-single retry for idempotent writes. Feed data is bounded to ten in-memory
+not retry: a bookmark write that fails is reconciled by a fresh read and then
+repeated only on the reader's request (see
+[Saved and bookmarks](#saved-and-bookmarks)). Feed data is bounded to ten in-memory
 pages and no query cache is persisted.
 
 ## Session and sign-in

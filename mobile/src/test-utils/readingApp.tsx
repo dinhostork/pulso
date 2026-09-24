@@ -119,7 +119,7 @@ export function testSession(
   const queryClient = createQueryClient();
   queryClient.setDefaultOptions({
     queries: { ...queryClient.getDefaultOptions().queries, gcTime: Infinity, retry: false },
-    mutations: { retry: false },
+    mutations: { retry: false, gcTime: Infinity },
   });
   const runtime = createSessionRuntime({
     baseUrl: "https://api.example.com",

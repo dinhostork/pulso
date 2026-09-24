@@ -448,7 +448,15 @@ Feed's visibility seam (policy v1: 50% for 1000 ms while focused and
 foregrounded, once per feed session), secure UUID sessions and events, and the
 bounded in-memory queue that alone owns delivery retry and is cleared on every
 session change (see
-[mobile/README.md](../../mobile/README.md#feedimpressions)).
+[mobile/README.md](../../mobile/README.md#feedimpressions)). Issue #50
+connects bookmarks: one shared mutation sends idempotent PUT/DELETE writes
+serialized per account and Story, applies only server-confirmed state to the
+Feed, detail and Saved caches, reconciles an ambiguous response by re-reading
+the Story before offering an explicit repeat of the same write, and removes the
+leaving account's bookmark mutations at every session boundary. The Saved tab
+follows the server cursor chain and keeps archived entries as removable
+tombstones; the server remains the only Bookmark authority (see
+[mobile/README.md](../../mobile/README.md#saved-and-bookmarks)).
 
 Native Android/iOS reading behavior is the Phase 3 acceptance target. Web must
 continue to compile/render, but production browser CORS and deployment are

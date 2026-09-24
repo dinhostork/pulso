@@ -26,6 +26,25 @@ describe("account-scoped server state", () => {
     client.clear();
   });
 
+  it("drops a leaving account's bookmark writes, pending or failed", async () => {
+    const client = createQueryClient();
+    const mutations = client.getMutationCache();
+    const never = () => new Promise<never>(() => undefined);
+    // No garbage-collection timer, which would keep Jest alive.
+    const gcTime = Infinity;
+    void mutations
+      .build(client, { mutationKey: queryKeys.bookmarkWrite("1", "42"), mutationFn: never, gcTime })
+      .execute(undefined);
+    void mutations
+      .build(client, { mutationKey: queryKeys.bookmarkWrite("2", "42"), mutationFn: never, gcTime })
+      .execute(undefined);
+    await clearAccountServerState(client, "1");
+    expect(mutations.getAll().map((mutation) => mutation.options.mutationKey)).toEqual([
+      queryKeys.bookmarkWrite("2", "42"),
+    ]);
+    client.clear();
+  });
+
   it("uses bounded, non-overlapping retry ownership", () => {
     const network = new ApiError("network", "feed.read");
     const server = new ApiError("http", "feed.read", { status: 503 });
