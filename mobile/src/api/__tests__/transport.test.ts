@@ -201,5 +201,42 @@ describe("fetch transport", () => {
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[1][1].headers.Authorization).toBe("Bearer new");
+    expect(credentials.refreshAfterUnauthorized).toHaveBeenCalledWith(7, "old");
+  });
+
+  it("rejects a response that arrives after the session epoch changed", async () => {
+    let epoch = 1;
+    const transport = createTransport({
+      baseUrl: "https://api.example.com",
+      fetch: jest.fn(async () => {
+        epoch = 2;
+        return response(JSON.stringify({ account: "previous" }));
+      }) as typeof fetch,
+      credentials: { accessToken: () => "token", sessionEpoch: () => epoch },
+    });
+    await expect(transport.request({ operation: "test", path: "/api/feed" })).rejects.toMatchObject(
+      { kind: "stale_session" },
+    );
+  });
+
+  it("does not replay when the session ends while refresh is pending", async () => {
+    let epoch = 3;
+    const fetchMock = jest.fn(async () => response("{}", { status: 401 }));
+    const transport = createTransport({
+      baseUrl: "https://api.example.com",
+      fetch: fetchMock as typeof fetch,
+      credentials: {
+        accessToken: () => "token",
+        sessionEpoch: () => epoch,
+        refreshAfterUnauthorized: async () => {
+          epoch = 4;
+          return "other-account-token";
+        },
+      },
+    });
+    await expect(transport.request({ operation: "test", path: "/api/feed" })).rejects.toMatchObject(
+      { kind: "stale_session" },
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -171,9 +171,9 @@ trailing slash.
 | `GET /api/feed`                       | `cursor?`, `limit?` (20 default, 50 max) | 200 StoryCard page                  | Reading + News / planned #47            |
 | `GET /api/stories/{story_id}`         | positive decimal ID                      | 200 StoryDetail                     | News + viewer decoration / planned #47  |
 | `GET /api/stories/{story_id}/sources` | `cursor?`, `limit?`, `synthesis_id?`     | 200 SourceArticle page              | News / planned #47                      |
-| `GET /api/bookmarks`                  | `cursor?`, `limit?`                      | 200 saved page including tombstones | Reading / planned #42/#47               |
-| `PUT /api/bookmarks/{story_id}`       | empty body                               | 200 bookmark result                 | Reading / planned #42/#47               |
-| `DELETE /api/bookmarks/{story_id}`    | no body                                  | 204, present or absent              | Reading / planned #42/#47               |
+| `GET /api/bookmarks`                  | `cursor?`, `limit?`                      | 200 saved page including tombstones | Reading / implemented #42               |
+| `PUT /api/bookmarks/{story_id}`       | empty body                               | 200 bookmark result                 | Reading / implemented #42               |
+| `DELETE /api/bookmarks/{story_id}`    | no body                                  | 204, present or absent              | Reading / implemented #42               |
 | `POST /api/feed-impressions`          | `{events:[...]}`                         | 200 per-event outcomes              | Reading / planned #43/#51               |
 
 Product errors are `{code,detail}` with an optional bounded `fields` object:
@@ -216,6 +216,52 @@ unavailable Story with 410, and reject a missing Story with 404. An existing
 bookmark survives archival and appears as a tombstone. Story rebuild, merge,
 or replacement never transfers it automatically. Bookmark does not alter feed
 order, facts, source counts, votes, positions, Perspectives, or Pulse.
+
+Reading owns the write transaction. It locks the Story row before checking an
+existing Bookmark or save eligibility, matching the Story-first lock order used
+by News refresh. The database uniqueness constraint is the final authority for
+`(user, story)`; constraint recovery occurs inside a savepoint so the enclosing
+transaction remains usable. Removal takes the same Story lock and stays
+available after archival.
+
+| Relation | On account deletion | On Story deletion | Ownership consequence |
+| --- | --- | --- | --- |
+| `Bookmark.user` | CASCADE | — | Private state disappears with its account |
+| `Bookmark.story` | — | PROTECT | Remove the Bookmark before exceptional hard deletion |
+
+The initial Reading migration depends on the swappable account model and News
+`0012_story_feed_order_index`. It adds no backfill and does not modify News,
+Article, or RawArticle rows. Saved composition first reads a bounded Bookmark
+page in `(created_at DESC, id DESC)` order and then asks the user-independent
+News read interface for all available factual cards in one batch. Missing,
+archived, or empty Stories are represented only as `{story_id, saved_at,
+availability: "UNAVAILABLE"}`.
+
+Authenticated examples (all responses carry `Cache-Control: private,
+no-store`):
+
+```http
+PUT /api/bookmarks/45
+Content-Type: application/json
+
+{}
+
+200
+{"story_id":"45","bookmarked":true,"saved_at":"2026-09-19T10:10:00Z"}
+```
+
+```http
+GET /api/bookmarks?limit=20
+
+200
+{"results":[{"story_id":"45","saved_at":"2026-09-19T10:10:00Z","availability":"UNAVAILABLE"}],"next_cursor":null}
+```
+
+```http
+DELETE /api/bookmarks/45
+
+204
+```
 
 ## FeedImpression meaning
 
@@ -262,9 +308,12 @@ Issue #44 implements this boundary in `mobile/src/api/` and
 `mobile/src/server-state/`. Native fetch accepts approved relative product and
 authentication paths only, normalizes transport/API failures and validates the
 repository contract fixtures. Runtime failures remain visible failures; test
-fixtures never become fallback UI data. Session credential persistence and
-single-flight refresh orchestration remain owned by #45, while exposure queue
-delivery remains owned by #51.
+fixtures never become fallback UI data. Issue #45 implements session
+credential persistence, single-flight refresh, epoch-guarded account isolation
+and protected routing in `mobile/src/session/` (see
+[mobile/README.md](../../mobile/README.md#session-and-sign-in)); its
+`subscribeSessionChanges` hook is the account-change signal for exposure queue
+delivery, which remains owned by #51.
 
 Native Android/iOS reading behavior is the Phase 3 acceptance target. Web must
 continue to compile/render, but production browser CORS and deployment are

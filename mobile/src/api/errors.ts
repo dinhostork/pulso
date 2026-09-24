@@ -1,5 +1,12 @@
 export type ApiErrorKind =
-  "configuration" | "timeout" | "aborted" | "network" | "http" | "malformed_json" | "malformed_dto";
+  | "configuration"
+  | "timeout"
+  | "aborted"
+  | "network"
+  | "http"
+  | "malformed_json"
+  | "malformed_dto"
+  | "stale_session";
 
 export type ApiFieldErrors = Readonly<Record<string, readonly string[]>>;
 
