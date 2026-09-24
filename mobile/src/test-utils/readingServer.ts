@@ -43,7 +43,7 @@ const CARD_FIELDS = [
 export type Fault =
   | { kind: "status"; status: number; code?: string; commit?: boolean }
   | { kind: "network"; commit: boolean }
-  | { kind: "hold"; gate: Deferred<void> };
+  | { kind: "hold"; gate: Deferred<void>; snapshot?: boolean };
 
 interface SavedRow {
   storyId: string;
@@ -205,8 +205,10 @@ export function readingServer(options: ReadingServerOptions = {}) {
     if (index === -1) return apply(request);
     const [{ fault }] = faults.splice(index, 1);
     if (fault.kind === "hold") {
+      // `snapshot`: answer from the state at arrival, delivered later (a slow response).
+      const early = fault.snapshot ? apply(request) : null;
       await fault.gate.promise;
-      return apply(request);
+      return early ?? apply(request);
     }
     if (fault.kind === "network") {
       if (fault.commit) apply(request);
@@ -224,11 +226,24 @@ export function readingServer(options: ReadingServerOptions = {}) {
     fail(method: string, path: RegExp, fault: Fault) {
       faults.push({ method, path, fault });
     },
-    /** The next matching request waits until the returned gate opens. */
-    hold(method: string, path: RegExp): Deferred<void> {
+    /**
+     * The next matching request waits until the returned gate opens. With
+     * `snapshot`, its response reflects the server state when it arrived.
+     */
+    hold(method: string, path: RegExp, options: { snapshot?: boolean } = {}): Deferred<void> {
       const gate = deferred<void>();
-      faults.push({ method, path, fault: { kind: "hold", gate } });
+      faults.push({ method, path, fault: { kind: "hold", gate, snapshot: options.snapshot } });
       return gate;
+    },
+    /** A write from another device of the same account, outside this app. */
+    async elsewhere(method: "PUT" | "DELETE", storyId: string, user = "reader") {
+      await handler({
+        method,
+        path: `/api/bookmarks/${storyId}`,
+        query: new URLSearchParams(),
+        body: undefined,
+        user,
+      });
     },
     savedIds(user: string): string[] {
       return [...rows(user)].sort((a, b) => b.seq - a.seq).map((row) => row.storyId);

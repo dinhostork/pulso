@@ -7,6 +7,7 @@ import type { Page, SavedEntry } from "@/api/types";
 import { nextCursor, queryKeys } from "@/server-state/query";
 
 import type { SavedData } from "./bookmarkCache";
+import { confirmationMark, hasConfirmationsSince } from "./confirmations";
 
 export type SavedStatus = "loading" | "error" | "ready";
 export type SavedRefreshStatus = "idle" | "refreshing" | "failed";
@@ -101,6 +102,7 @@ export function useSaved(accountId: string): SavedController {
     refreshAttempt.current = attempt;
     setRefreshStatus("refreshing");
     let page: Page<SavedEntry>;
+    const mark = confirmationMark();
     try {
       page = await api.bookmarks({ signal: attempt.signal });
     } catch {
@@ -115,9 +117,13 @@ export function useSaved(accountId: string): SavedController {
     if (refreshAttempt.current !== attempt) return false;
     refreshAttempt.current = null;
     queryClient.setQueryData<SavedData>(queryKey, { pages: [page], pageParams: [null] });
+    // A write confirmed while this page was in flight may be missing from it: read again.
+    if (hasConfirmationsSince(queryClient, accountId, mark)) {
+      void queryClient.invalidateQueries({ queryKey, exact: true });
+    }
     setRefreshStatus("idle");
     return true;
-  }, [api, queryClient, queryKey]);
+  }, [api, queryClient, queryKey, accountId]);
 
   const entries = useMemo(() => savedEntries(data), [data]);
   const status: SavedStatus = data !== undefined ? "ready" : query.isError ? "error" : "loading";

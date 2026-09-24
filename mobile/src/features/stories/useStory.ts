@@ -10,13 +10,20 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { ApiError } from "@/api/errors";
 import { useMobileApi } from "@/api/MobileApiProvider";
 import type { Page, SourceArticle } from "@/api/types";
+import { confirmationMark, withConfirmedBookmarks } from "@/features/bookmarks/confirmations";
 import { queryKeys } from "@/server-state/query";
 
 export function useStoryDetail(accountId: string, storyId: string) {
   const api = useMobileApi();
+  const queryClient = useQueryClient();
   return useQuery({
     queryKey: queryKeys.story(accountId, storyId),
-    queryFn: ({ signal }) => api.story(storyId, signal),
+    queryFn: async ({ signal }) => {
+      // A detail answered before a Bookmark write was confirmed keeps that write's state.
+      const mark = confirmationMark();
+      const detail = await api.story(storyId, signal);
+      return withConfirmedBookmarks(queryClient, accountId, mark, [detail])[0];
+    },
   });
 }
 

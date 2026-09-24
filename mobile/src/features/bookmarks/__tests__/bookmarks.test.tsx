@@ -270,6 +270,58 @@ describe("bookmark write coordination", () => {
   });
 });
 
+describe("bookmark writes racing an older Feed refresh", () => {
+  async function staleRefresh(server: ReadingServer) {
+    const gate = server.hold("GET", /^\/api\/feed$/, { snapshot: true });
+    await fireEvent(refreshControl(), "refresh");
+    return gate;
+  }
+
+  it("keeps a save confirmed after the refresh started", async () => {
+    const server = readingServer({ stories: STORIES });
+    const { runtime } = await openApp(server);
+    await screen.findByTestId("story-card-2");
+    // Another device saves Story 2 before the refresh reads: the refresh must show it.
+    await server.elsewhere("PUT", "2");
+
+    const gate = await staleRefresh(server);
+    await waitFor(() =>
+      expect(runtime.productCalls.filter((call) => call.path === "/api/feed")).toHaveLength(2),
+    );
+    await fireEvent.press(screen.getByTestId("story-bookmark-1"));
+    await waitFor(() => expect(feedCard("1").getByLabelText("Status: Saved")).toBeTruthy());
+
+    // The refresh answered before the PUT committed: Story 1 unsaved, Story 2 saved.
+    await act(async () => gate.resolve());
+    await waitFor(() => expect(feedCard("2").getByLabelText("Status: Saved")).toBeTruthy());
+    expect(feedCard("1").getByLabelText("Status: Saved")).toBeTruthy();
+    expect(screen.getByTestId("story-bookmark-1")).toHaveAccessibleName("Remove from Saved");
+    expect(server.savedIds("reader").sort()).toEqual(["1", "2"]);
+  });
+
+  it("keeps a removal confirmed after the refresh started", async () => {
+    const server = readingServer({ stories: STORIES, saved: { reader: ["1", "2"] } });
+    const { runtime } = await openApp(server);
+    await waitFor(() => expect(feedCard("2").getByLabelText("Status: Saved")).toBeTruthy());
+    // Another device removes Story 2 before the refresh reads: the refresh must show that.
+    await server.elsewhere("DELETE", "2");
+
+    const gate = await staleRefresh(server);
+    await waitFor(() =>
+      expect(runtime.productCalls.filter((call) => call.path === "/api/feed")).toHaveLength(2),
+    );
+    await fireEvent.press(screen.getByTestId("story-bookmark-1"));
+    await waitFor(() => expect(feedCard("1").queryByLabelText("Status: Saved")).toBeNull());
+
+    // The refresh answered before the DELETE committed: Story 1 still saved.
+    await act(async () => gate.resolve());
+    await waitFor(() => expect(feedCard("2").queryByLabelText("Status: Saved")).toBeNull());
+    expect(feedCard("1").queryByLabelText("Status: Saved")).toBeNull();
+    expect(screen.getByTestId("story-bookmark-1")).toHaveAccessibleName("Save");
+    expect(server.savedIds("reader")).toEqual([]);
+  });
+});
+
 describe("Saved list", () => {
   const many = Array.from({ length: 5 }, (_, index) => storyDetail(String(index + 10)));
 

@@ -4,6 +4,8 @@ import type { Page, SavedEntry, StoryDetail } from "@/api/types";
 import type { FeedData } from "@/features/feed/feedPages";
 import { queryKeys } from "@/server-state/query";
 
+import { recordConfirmation } from "./confirmations";
+
 export type SavedData = InfiniteData<Page<SavedEntry>, string | null>;
 
 /** Marks one Story's viewer flag in every loaded Feed page, keeping untouched pages identical. */
@@ -51,6 +53,7 @@ export function applyConfirmedBookmark(
   storyId: string,
   bookmarked: boolean,
 ): void {
+  recordConfirmation(client, accountId, storyId, bookmarked);
   client.setQueryData<FeedData>(queryKeys.feed(accountId), (data) =>
     data === undefined ? undefined : withFeedBookmark(data, storyId, bookmarked),
   );

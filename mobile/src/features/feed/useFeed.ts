@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "@/api/errors";
 import { useMobileApi } from "@/api/MobileApiProvider";
 import type { FeedPage } from "@/api/types";
+import { confirmationMark, withConfirmedBookmarks } from "@/features/bookmarks/confirmations";
 import { queryKeys } from "@/server-state/query";
 
 import {
@@ -45,9 +46,19 @@ export function useFeed(accountId: string): FeedController {
   const api = useMobileApi();
   const queryClient = useQueryClient();
   const queryKey = useMemo(() => queryKeys.feed(accountId), [accountId]);
+  // A page answered before a Bookmark write was confirmed must not undo that write's state.
+  const readFeed = useCallback(
+    async (input: { cursor?: string; signal: AbortSignal }): Promise<FeedPage> => {
+      const mark = confirmationMark();
+      const page = await api.feed(input);
+      const results = withConfirmedBookmarks(queryClient, accountId, mark, page.results);
+      return results === page.results ? page : { ...page, results };
+    },
+    [api, queryClient, accountId],
+  );
   const query = useInfiniteQuery<FeedPage, DefaultError, FeedData, typeof queryKey, string | null>({
     queryKey,
-    queryFn: ({ pageParam, signal }) => api.feed({ cursor: pageParam ?? undefined, signal }),
+    queryFn: ({ pageParam, signal }) => readFeed({ cursor: pageParam ?? undefined, signal }),
     initialPageParam: null,
     getNextPageParam: nextFeedCursor,
     staleTime: Infinity,
@@ -96,7 +107,7 @@ export function useFeed(accountId: string): FeedController {
     setRefreshStatus("refreshing");
     let page: FeedPage;
     try {
-      page = await api.feed({ signal: attempt.signal });
+      page = await readFeed({ signal: attempt.signal });
     } catch {
       if (refreshAttempt.current === attempt) {
         refreshAttempt.current = null;
@@ -113,7 +124,7 @@ export function useFeed(accountId: string): FeedController {
     setRefreshStatus("idle");
     setRefreshGeneration((generation) => generation + 1);
     return true;
-  }, [api, queryClient, queryKey]);
+  }, [readFeed, queryClient, queryKey]);
 
   const items = useMemo(() => feedItems(data), [data]);
   const status: FeedStatus = data !== undefined ? "ready" : query.isError ? "error" : "loading";

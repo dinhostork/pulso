@@ -526,6 +526,11 @@ is no toggle request and no optimistic state.
   Story changes), the row is dropped from loaded Saved pages on removal, and
   Saved is invalidated so new rows and order come from the server. The Feed
   order never changes.
+- **Older reads never undo a confirmed write.** Each confirmed state is
+  stamped in the account's cache with a monotonic sequence. A Feed page, Feed
+  refresh or Story detail whose request started before that confirmation
+  applies the confirmed flag to that Story only; every other Story keeps the
+  response's value. A Saved refresh that raced a write is read again.
 - **Ambiguous results.** A timeout, network failure, 5xx or broken 2xx body
   may hide a committed write, so the Story detail is read again
   (`viewer.bookmarked`). If the read shows the intended state, the change is

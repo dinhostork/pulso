@@ -31,6 +31,9 @@ export const queryKeys = {
       synthesisId === null ? null : productId(synthesisId, "synthesisId"),
     ] as const,
   bookmarks: (accountId: string) => [...queryKeys.account(accountId), "bookmarks"] as const,
+  /** Bookmark states this device's writes confirmed, for ordering them against older reads. */
+  bookmarkConfirmations: (accountId: string) =>
+    [...queryKeys.account(accountId), "bookmark-confirmations"] as const,
   /** Mutation key (not a query): every Bookmark write for one Story, from any screen. */
   bookmarkWrite: (accountId: string, storyId: string) =>
     [...queryKeys.account(accountId), "bookmark-write", productId(storyId, "storyId")] as const,
