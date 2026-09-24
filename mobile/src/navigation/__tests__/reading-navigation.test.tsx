@@ -18,8 +18,9 @@ jest.mock("expo-linking", () => ({
 async function signedIn(initialUrl = "/") {
   const store = createWebMemoryRefreshTokenStore();
   await store.write("refresh-reader");
-  const controller = testSession(store);
-  const app = await renderReadingApp(controller, initialUrl);
+  const runtime = testSession(store);
+  const { controller } = runtime;
+  const app = await renderReadingApp(runtime, initialUrl);
   await waitFor(() => expect(controller.snapshot().status).toBe("authenticated"));
   return { app, controller };
 }
@@ -139,10 +140,10 @@ describe("reading navigation", () => {
   );
 
   it("does not remember an invalid or external return route while signed out", async () => {
-    const controller = testSession();
-    const app = await renderReadingApp(controller, "/stories/abc");
+    const runtime = testSession();
+    const app = await renderReadingApp(runtime, "/stories/abc");
     await screen.findByText("Sign in to Pulso");
-    expect(controller.consumeReturnRoute()).toBeNull();
+    expect(runtime.controller.consumeReturnRoute()).toBeNull();
     expect(app.pathname()).toBe("/sign-in");
   });
 

@@ -40,8 +40,9 @@ describe("protected session routing", () => {
   });
 
   it("does not carry account A's screen or identity into account B", async () => {
-    const controller = testSession();
-    const app = await renderReadingApp(controller, "/stories/7");
+    const runtime = testSession();
+    const { controller } = runtime;
+    const app = await renderReadingApp(runtime, "/stories/7");
     await signIn("reader");
     await screen.findByText("Story details");
 

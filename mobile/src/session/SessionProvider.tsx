@@ -27,3 +27,13 @@ export function useSession(): { state: SessionState; controller: SessionControll
   );
   return { state, controller };
 }
+
+/**
+ * The signed-in account's decimal ID, which scopes every viewer-decorated
+ * query key. Null outside an authenticated session: protected screens are
+ * unmounted then, but a screen that is still leaving renders nothing.
+ */
+export function useAccountId(): string | null {
+  const { state } = useSession();
+  return state.status === "authenticated" ? state.account.id : null;
+}

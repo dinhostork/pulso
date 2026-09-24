@@ -6,9 +6,9 @@
 
 An Expo/TypeScript application shell for Pulso's React Native mobile app. The
 reproducible bootstrap now includes the Phase 3 transport, DTO-decoding and
-server-state boundary, sign-in and account-isolated sessions, and the Feed/Saved
-navigation with shared accessible UI primitives, but no Story Feed content or
-fake runtime dataset. See the [root README](../README.md) for the product this
+server-state boundary, sign-in and account-isolated sessions, the Feed/Saved
+navigation with shared accessible UI primitives, and the paginated Story Feed
+read from the real `GET /api/feed` endpoint. There is no fake runtime dataset. See the [root README](../README.md) for the product this
 shell will eventually host, and
 [docs/architecture/module-boundaries.md](../docs/architecture/module-boundaries.md)
 for backend module ownership.
@@ -55,9 +55,12 @@ directly over the local network or an emulator/simulator's loopback network.
 | iOS simulator                | `npx expo start --ios`                    | macOS with Xcode                                                 |
 | Web                          | `npx expo start --web`                    | Nothing extra; runs in a browser                                 |
 
-The shell renders without a running backend and makes no request on startup.
-It does not print the configured origin or use contract fixtures as runtime
-fallback content.
+Signed out, the app renders without a running backend and makes no product
+request. Signed in, the Feed calls the configured backend; without one it shows
+its "Feed unavailable" state with a retry action. It does not print the
+configured origin or use contract fixtures as runtime fallback content. To see
+real Stories, run the backend (see [`docs/development.md`](../docs/development.md)),
+provision an account, sign in, and let the Story worker publish ready Stories.
 
 See "Quality and testing" below for the full set of checks (lint, format,
 typecheck, tests) and how to run them without any interactive prompts.
@@ -103,7 +106,7 @@ default case) so the shell still renders with no `.env` file at all.
 
 ```text
 src/
-  api/                fetch transport, normalized errors, DTO decoders and API helpers
+  api/                fetch transport, normalized errors, DTO decoders, API helpers and provider
   app/                expo-router file-based routes; only thin screens/layouts here
     _layout.tsx       root layout (QueryClientProvider, SessionProvider, safe area, Stack)
     sign-in.tsx       sign-in / restore-error route; resumes a validated pending route
@@ -112,7 +115,7 @@ src/
       _layout.tsx     session guard + reading stack (initial route: the tabs)
       (tabs)/         the only two tabs
         _layout.tsx   Feed and Saved
-        index.tsx     Feed (route target for #48)
+        index.tsx     Feed (#48)
         saved.tsx     Saved (route target for #50)
         __tests__/    route tests — see note below
       stories/[storyId]/
@@ -122,21 +125,23 @@ src/
   config/
     env.ts            public, build-time-inlined configuration (API base URL)
   features/           feature screens rendered by the routes (feed, bookmarks, stories)
+    feed/             Feed query/chain, Story card, visibility seam (#48)
   navigation/         tab bar, stack, route parsing/hrefs and the external publisher seam
   server-state/       TanStack Query client, account-scoped keys and retry policy
   session/            credential storage, session controller, provider and session UI
-  test-utils/         test-only helpers (outside src/app and outside __tests__)
+  test-utils/         test-only helpers and wire-shaped builders (outside src/app and __tests__)
   theme/              semantic color, spacing, type and touch-target tokens
 assets/               app icon and splash images
 ```
 
 ## Navigation and reading UI
 
-Issue #46 establishes navigation and UI primitives only. The Feed, Saved,
-Story and source routes are **route targets**: each states plainly that its
-content is not available in this build, and #48–#50 replace their bodies. No
-Story, source or bookmark content is fabricated, and there are no Pulse,
-Opinion, profile, explore, search, audio or sharing affordances.
+Issue #46 establishes navigation and UI primitives; #48 fills the Feed (see
+[Story Feed](#story-feed)). The Saved, Story and source routes are still
+**route targets** that state plainly that their content is not available in
+this build until #49/#50 replace their bodies. No Story, source or bookmark
+content is fabricated, and there are no Pulse, Opinion, profile, explore,
+search, audio or sharing affordances.
 
 | Path                    | Screen                  | Access                   | Back                                  |
 | ----------------------- | ----------------------- | ------------------------ | ------------------------------------- |
@@ -196,6 +201,94 @@ strings; #49 decides “Published” vs “First seen”).
 
 Manual screen-reader and large-text checks on native targets are recorded in
 #52.
+
+## Story Feed
+
+The Feed tab (`src/features/feed/`) lists ready Stories from `GET /api/feed`
+for the signed-in account. One Story is one card, however many Articles
+support it.
+
+### Card hierarchy
+
+Only persisted factual fields are shown, as plain text, in this order:
+
+1. Topics (labels, omitted when the Story has none);
+2. the Story title;
+3. the first Summary element and, under a "Context" label, the first Context
+   element — each omitted when absent, never replaced with filler;
+4. "Latest publication …" from the Story's publication window, or
+   "Publication time not available" (Story creation time is never shown as a
+   publication time);
+5. the published generation's counts, "1 source · 1 article" /
+   "2 sources · 3 articles" — distinct publishers, never called verified,
+   independent or confirmed;
+6. worded labels for "Saved" (the viewer's bookmark) and a non-current state.
+
+Pressing the card opens `/stories/{id}`; "View sources" opens
+`/stories/{id}/sources`. There is no media box, image placeholder, Pulse
+preview, like count, recommendation reason, "why it matters" or timeline.
+
+### Pagination, refresh and the page bound
+
+```mermaid
+stateDiagram-v2
+    [*] --> loading: first page
+    loading --> error: request failed
+    error --> loading: Try again
+    loading --> empty: 0 Stories, no cursor
+    loading --> ready
+    ready --> ready: end reached → next page (one request at a time)
+    ready --> page_error: next page failed (cards kept)
+    page_error --> ready: Try again
+    ready --> expired: cursor rejected (invalid_cursor)
+    expired --> ready: Restart from the newest Stories
+    ready --> ended: next_cursor = null
+    ready --> bound: 10 pages retained, more exist
+    bound --> ready: Restart from the newest Stories
+    ready --> ready: pull-to-refresh succeeded (new chain)
+    ready --> refresh_error: pull-to-refresh failed (cards and chain kept)
+    refresh_error --> ready: Try refreshing again
+```
+
+- **One cursor chain.** The Feed is one account-scoped TanStack infinite query
+  (`queryKeys.feed(accountId)`); pages follow `next_cursor` exactly and are
+  never re-sorted on the device. Cards are keyed by Story ID, and a Story ID
+  repeated by a later or retried page keeps its first slot.
+- **Load more** runs from the list's end-reached event. A synchronous guard
+  plus `fetchNextPage({ cancelRefetch: false })` turn repeated or simultaneous
+  events into one request. A failed page shows a footer retry and does not
+  re-fire on further scrolling.
+- **Pull-to-refresh** fetches a new first page. Only when it succeeds are any
+  in-flight old-chain page requests cancelled (TanStack reverts them, so they
+  can never append) and the cache replaced by that single page. A failed
+  refresh keeps every card and the old chain, and shows a targeted retry.
+- **Automatic refetch** triggers (mount, focus, reconnect) are off: a new chain
+  would reorder cards beneath the reader. A refetch that still happens (for
+  example an invalidation) re-walks the chain coherently, keeps the cards on
+  failure and is not treated as an explicit refresh.
+- **Page bound.** At most ten pages are retained (`MAX_FEED_PAGES`). At the
+  bound the footer offers "Restart from the newest Stories", which is an
+  explicit refresh; pages are never dropped from the middle of the chain.
+- **Position.** The Feed stays mounted beneath Story/source screens, so back
+  navigation returns to the same list and scroll offset without refetching.
+
+**Ordering and refresh limitations.** Order is the server's immutable
+`story_created_desc_v1` (Story creation, newest first), the same for every
+account; it is not publication recency or relevance. A cursor chain does not
+show Stories created after its first page until the reader refreshes, and a
+cursor expires after 24 hours; the next page then reports that the Feed
+expired and offers the same restart instead of a retry that cannot succeed. Cards are not updated in place between refreshes.
+
+### Visibility seam
+
+`FeedScreen` accepts an optional, stable `onVisibilityChange` callback. When
+present, cell layouts and the scroll viewport feed `FeedVisibilityTracker`
+(`visibility.ts`), which reports `{storyId, position, share}` for laid-out
+cards: `position` is the zero-based absolute rendered position, and `share`
+is visible height divided by the smaller of card and viewport height (so a
+card taller than the screen counts as fully visible when it fills it).
+Fetching, page receipt, mounting and rendering report nothing, and #48 sends no
+FeedImpression; qualification and delivery belong to #51.
 
 ## API and server-state boundary
 
@@ -363,10 +456,18 @@ and render the sign-in screen and protected routing with
 and Android back, invalid IDs, not-found and publisher hand-off; component and
 theme tests cover roles, states, touch targets, focus, wrapping and contrast.
 
+Feed tests (`src/features/feed/__tests__/`) drive the real route tree against
+a scripted `/api/feed` to cover card content and missing fields, first
+load/error/empty, next page/end, repeated end-reached, page and refresh
+failures, stale page responses after refresh, duplicate IDs, the page bound
+and restart, navigation IDs, position on return, account isolation, and that
+no image or FeedImpression request exists; hook tests cover simultaneous
+load-more calls and refresh generations.
+
 The original bootstrap tests still verify:
 
 - `src/app/(app)/(tabs)/__tests__/index.test.tsx` renders the signed-in Feed
-  route target and its sign-out action.
+  from the feed endpoint and its sign-out action.
   `@testing-library/react-native`'s `render` is asynchronous (`await
 render(...)`) as of v14; a call site that forgets `await` fails with a
   clear "`render` function has not been called" error rather than a silent

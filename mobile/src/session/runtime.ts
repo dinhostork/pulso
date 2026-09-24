@@ -11,6 +11,8 @@ import { createRefreshTokenStore, type RefreshTokenStore } from "./storage";
 export interface SessionRuntime {
   controller: SessionController;
   api: MobileApi;
+  /** The server-state cache the controller clears on every account boundary. */
+  queryClient: QueryClient;
 }
 
 export interface SessionRuntimeOptions {
@@ -38,12 +40,13 @@ export function createSessionRuntime(options: SessionRuntimeOptions = {}): Sessi
         controller?.refreshAfterUnauthorized(epoch, rejectedToken) ?? Promise.resolve(null),
     },
   });
+  const queryClient = options.queryClient ?? sharedQueryClient;
   controller = new SessionController({
     api: new SessionApi(transport),
-    queryClient: options.queryClient ?? sharedQueryClient,
+    queryClient,
     refreshTokenStore: options.refreshTokenStore ?? createRefreshTokenStore(),
   });
-  return { controller, api: createMobileApi(transport) };
+  return { controller, api: createMobileApi(transport), queryClient };
 }
 
 export const sessionRuntime = createSessionRuntime();

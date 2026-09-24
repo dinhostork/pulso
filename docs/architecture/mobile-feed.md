@@ -431,7 +431,12 @@ and protected routing in `mobile/src/session/` (see
 delivery, which remains owned by #51. Issue #46 adds the Feed/Saved tab layout, the
 protected Story/source routes with Feed as their back target, the external
 publisher hand-off seam, and the shared accessible UI primitives
-(`mobile/src/components/`, `mobile/src/theme/`).
+(`mobile/src/components/`, `mobile/src/theme/`). Issue #48 implements the Feed
+as one account-scoped infinite query over this contract's cursor chain:
+explicit refresh replaces the chain only on success, automatic refetch
+triggers are off, at most ten pages are retained with an explicit restart at
+the bound, and a geometry-only visibility seam is exposed for #51 (see
+[mobile/README.md](../../mobile/README.md#story-feed)).
 
 Native Android/iOS reading behavior is the Phase 3 acceptance target. Web must
 continue to compile/render, but production browser CORS and deployment are
