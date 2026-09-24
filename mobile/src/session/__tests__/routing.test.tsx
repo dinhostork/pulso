@@ -39,6 +39,21 @@ describe("protected session routing", () => {
     expect(screen.queryByText("Sign in to Pulso")).toBeNull();
   });
 
+  it("returns to sign-in when the stored refresh token's account no longer exists", async () => {
+    // The scripted auth fake answers an unknown account's refresh with 401, as the
+    // backend does for a deleted account (`no_active_account`).
+    const store = createWebMemoryRefreshTokenStore();
+    await store.write("refresh-deleted-account");
+    const runtime = testSession(store);
+    const app = await renderReadingApp(runtime);
+
+    expect(await screen.findByText("Your session has ended. Sign in again.")).toBeTruthy();
+    expect(app.pathname()).toBe("/sign-in");
+    expect(screen.queryByText(/could not reach the server/)).toBeNull();
+    expect(await store.read()).toBeNull();
+    expect(runtime.productCalls).toEqual([]);
+  });
+
   it("does not carry account A's screen or identity into account B", async () => {
     const runtime = testSession(undefined, readingProduct);
     const { controller } = runtime;

@@ -2,6 +2,8 @@
 
 from django.contrib.auth import authenticate, get_user_model
 from rest_framework import serializers
+from rest_framework.exceptions import AuthenticationFailed
+from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 
 
 class LoginSerializer(serializers.Serializer):
@@ -34,3 +36,23 @@ class CurrentUserSerializer(serializers.ModelSerializer):
         # Deliberately minimal: no email, name or permission fields yet.
         fields = ["id", "username"]
         read_only_fields = fields
+
+
+class RefreshSerializer(TokenRefreshSerializer):
+    """SimpleJWT's refresh, with a deleted account rejected like an inactive one.
+
+    The installed serializer loads the token's user with `objects.get()` and
+    lets a missing row escape as a 500. A refresh token whose account no
+    longer exists is lost authentication, so it gets the same 401
+    `no_active_account` response as an inactive account. Only the User
+    model's own `DoesNotExist` is translated; every other failure is left as
+    SimpleJWT or Django raise it.
+    """
+
+    def validate(self, attrs):
+        try:
+            return super().validate(attrs)
+        except get_user_model().DoesNotExist:
+            raise AuthenticationFailed(
+                self.error_messages["no_active_account"], "no_active_account"
+            ) from None

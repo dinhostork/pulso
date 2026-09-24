@@ -211,3 +211,61 @@ def test_blacklisting_a_refresh_token_does_not_create_or_touch_domain_users(user
 
     after = set(user_model.objects.values_list("id", flat=True))
     assert before == after
+
+
+# SimpleJWT's existing body for a refresh token whose account cannot authenticate.
+NO_ACTIVE_ACCOUNT = {"detail": "No active account found for the given token."}
+
+
+def post_refresh(refresh):
+    return Client().post(REFRESH_URL, {"refresh": str(refresh)}, content_type="application/json")
+
+
+@pytest.mark.django_db
+def test_refresh_for_a_deleted_account_is_a_401_and_recreates_nothing(user):
+    user_model = get_user_model()
+    refresh = RefreshToken.for_user(user)
+    deleted_id = user.pk
+    user.delete()
+
+    response = post_refresh(refresh)
+
+    assert response.status_code == 401
+    assert response.json() == NO_ACTIVE_ACCOUNT
+    assert "access" not in response.json()
+    assert not user_model.objects.filter(pk=deleted_id).exists()
+    assert user_model.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_refresh_for_an_inactive_account_keeps_the_same_401(inactive_user):
+    response = post_refresh(RefreshToken.for_user(inactive_user))
+
+    assert response.status_code == 401
+    assert response.json() == NO_ACTIVE_ACCOUNT
+
+
+@pytest.mark.django_db
+def test_expired_and_malformed_refresh_tokens_stay_invalid_token_401s(user):
+    expired = RefreshToken.for_user(user)
+    expired.set_exp(lifetime=timedelta(seconds=-1))
+
+    for token in (expired, "not-a-jwt"):
+        response = post_refresh(token)
+        assert response.status_code == 401
+        assert response.json()["code"] == "token_not_valid"
+
+
+@pytest.mark.django_db
+def test_a_genuine_failure_during_the_user_lookup_is_not_turned_into_a_401(user, monkeypatch):
+    from django.db import DatabaseError
+    from django.db.models import QuerySet
+
+    refresh = RefreshToken.for_user(user)
+
+    def failing_get(self, *args, **kwargs):
+        raise DatabaseError("database unavailable")
+
+    monkeypatch.setattr(QuerySet, "get", failing_get)
+    with pytest.raises(DatabaseError):
+        post_refresh(refresh)

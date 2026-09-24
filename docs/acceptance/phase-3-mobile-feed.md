@@ -135,16 +135,34 @@ back returned to the same Sources route. On two of the round trips Android's
 low-memory killer terminated Expo Go while Firefox was in front; Pulso then
 cold-started into the Feed with the session restored.
 
-### Defect found during the native smoke
+### Defect found during the native smoke (fixed)
 
-A device still holding the refresh token of an account that was deleted
-afterwards could not recover by itself: `POST /api/auth/refresh` returned 500
-instead of 401, because the installed SimpleJWT `TokenRefreshSerializer`
-looks the user up without handling a missing row. The app therefore showed
-"Pulso could not reach the server to restore your session" with Try again
-instead of returning to sign-in; "Sign out" cleared the local credential and
-recovered. It affects only tokens of deleted accounts. It is recorded here
-and not fixed in Phase 3.
+Discovered during the physical Android smoke: a device still holding the
+refresh token of an account that had since been deleted could not recover by
+itself. `POST /api/auth/refresh` returned 500, because the installed SimpleJWT
+`TokenRefreshSerializer` loads the token's user without handling a missing
+row; the app correctly treated a 5xx as retryable and showed "Pulso could not
+reach the server to restore your session" with a Try again that could never
+succeed. "Sign out" cleared the credential and recovered.
+
+Fixed after the smoke: the project's refresh endpoint
+(`accounts.views.RefreshView` with `accounts.serializers.RefreshSerializer`)
+now answers a deleted account's token with the same 401 body SimpleJWT
+already returns for an inactive account (`No active account found for the
+given token.`). Only the User model's missing-row case is translated; valid,
+expired, malformed and blacklisted tokens keep their existing behavior, and
+unexpected server failures still surface as errors. The session layer
+already treats a 400/401 refresh during restore as terminal: it clears the
+stored refresh credential and account-scoped cache state and returns to
+sign-in with "Your session has ended. Sign in again."
+
+Regression coverage: `backend/tests/test_authentication.py` (deleted
+account → 401 with no user recreated, inactive-account parity, expired and
+malformed tokens, a database failure during the lookup not masked as 401) and
+`mobile/src/session/__tests__/routing.test.tsx` (cold start with a rejected
+refresh token lands on sign-in with the credential cleared and no product
+request). The fix was verified at the HTTP and session boundaries only; no
+second physical-device run was performed for it.
 
 ### Other limitations
 
@@ -185,9 +203,9 @@ Results on the commit that records this document, run locally with the CI comman
 
 | Gate | Result |
 | --- | --- |
-| Backend `pytest` | 1090 passed, 7 deselected (the 5 `celery_smoke` and 2 opt-in `local_embedding` tests) |
+| Backend `pytest` | 1094 passed, 7 deselected (the 5 `celery_smoke` and 2 opt-in `local_embedding` tests) |
 | Worker smoke `pytest -m celery_smoke` | 5 passed, against a separately running worker |
 | Ruff lint / format, Django checks, migration drift | Pass / pass / pass / no changes |
-| Mobile Jest (`test:ci`) | 29 suites, 329 tests passed (collection checked with `npx jest --listTests`) |
+| Mobile Jest (`test:ci`) | 29 suites, 330 tests passed (collection checked with `npx jest --listTests`) |
 | Expo Doctor, ESLint, Prettier, TypeScript | 21/21 / pass / pass / pass |
 | Web export route check | Pass (15 route files: the 7 Phase 3 routes plus group aliases) |

@@ -1719,7 +1719,9 @@ uv run --locked pytest tests/test_authentication.py -v
 Covers: valid/invalid/unknown/inactive login (with byte-identical generic
 failure responses), password never appearing in any response, current-user
 with no/malformed/expired/valid tokens, refresh (including rejecting an
-access token used as a refresh token), logout (missing field, already-used
+access token used as a refresh token, and answering an expired, malformed,
+inactive-account or deleted-account refresh token with 401 rather than a
+server error), logout (missing field, already-used
 refresh token, blocking further refresh), the documented residual-validity
 window on an already-issued access token after logout, and that neither
 login nor logout requires a CSRF token (`Client(enforce_csrf_checks=True)`).
@@ -1902,7 +1904,7 @@ they never include credentials, publisher URLs or reading history.
 | Empty Feed, processing `FAILED` | Missing local embedding model | `python manage.py news_story_backlog` shows `PROVIDER_FAILED`; install the model ([Providers](#providers)) |
 | A Story is missing from the Feed but its detail opens | Its generation is `STALE`/`FAILED` or not yet synthesized (`UPDATING`/`PREPARING` on detail) | `python manage.py news_stories` and `news_story --story ID`; `news_story_refresh --stale-failed` |
 | App shows "Feed unavailable" | Backend unreachable from the device, wrong `EXPO_PUBLIC_API_BASE_URL`, or `DisallowedHost` | Backend logs; see [mobile networking](../mobile/README.md#api-base-url) |
-| Returned to sign-in ("Your session has ended") | Refresh token expired (14 days), blacklisted by logout, or rejected | Sign in again; expected behavior |
+| Returned to sign-in ("Your session has ended") | Refresh token expired (14 days), blacklisted by logout, or its account deactivated or deleted (401) | Sign in again; expected behavior |
 | Detail says "Story unavailable" | Story archived or emptied (410) | `news_story --story ID` shows `ARCHIVED`; its Saved entry is a tombstone |
 | "The publication could not be opened" | No browser handled the link, or the stored URL is withheld as unsafe (`canonical_url: null`) | Device browser settings; the Article's URL in the admin |
 | Exposure events missing | Queued events are in memory only: process death, force quit or sign-out drops them; 3 failed retries drop a batch | Expected v0.4 behavior; no server-side trace exists |

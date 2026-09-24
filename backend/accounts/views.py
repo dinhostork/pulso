@@ -6,8 +6,14 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import TokenRefreshView
 
-from .serializers import CurrentUserSerializer, LoginSerializer, LogoutSerializer
+from .serializers import (
+    CurrentUserSerializer,
+    LoginSerializer,
+    LogoutSerializer,
+    RefreshSerializer,
+)
 
 
 class LoginView(APIView):
@@ -49,6 +55,12 @@ class LogoutView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return Response(status=status.HTTP_205_RESET_CONTENT)
+
+
+class RefreshView(TokenRefreshView):
+    """SimpleJWT's refresh endpoint; a deleted account's token is a 401, not a 500."""
+
+    serializer_class = RefreshSerializer
 
 
 class CurrentUserView(APIView):
