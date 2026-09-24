@@ -6,8 +6,9 @@
 
 An Expo/TypeScript application shell for Pulso's React Native mobile app. The
 reproducible bootstrap now includes the Phase 3 transport, DTO-decoding and
-server-state boundary plus sign-in and account-isolated sessions, but no Story
-Feed screen or fake runtime dataset. See the [root README](../README.md) for the product this
+server-state boundary, sign-in and account-isolated sessions, and the Feed/Saved
+navigation with shared accessible UI primitives, but no Story Feed content or
+fake runtime dataset. See the [root README](../README.md) for the product this
 shell will eventually host, and
 [docs/architecture/module-boundaries.md](../docs/architecture/module-boundaries.md)
 for backend module ownership.
@@ -103,19 +104,98 @@ default case) so the shell still renders with no `.env` file at all.
 ```text
 src/
   api/                fetch transport, normalized errors, DTO decoders and API helpers
-  app/                expo-router file-based routes; only screens/layouts here
+  app/                expo-router file-based routes; only thin screens/layouts here
     _layout.tsx       root layout (QueryClientProvider, SessionProvider, safe area, Stack)
-    sign-in.tsx       sign-in / restore-error route
+    sign-in.tsx       sign-in / restore-error route; resumes a validated pending route
+    +not-found.tsx    recoverable state for unknown paths
     (app)/            protected product routes; rendered only for an identified account
-      _layout.tsx     session guard
-      index.tsx       the landing (Feed placeholder) screen
-      __tests__/      tests for files in (app)/ — see note below
+      _layout.tsx     session guard + reading stack (initial route: the tabs)
+      (tabs)/         the only two tabs
+        _layout.tsx   Feed and Saved
+        index.tsx     Feed (route target for #48)
+        saved.tsx     Saved (route target for #50)
+        __tests__/    route tests — see note below
+      stories/[storyId]/
+        index.tsx     Story details (route target for #49)
+        sources.tsx   Story sources (route target for #49)
+  components/         shared reading primitives: text, button, status states, source row, screen
   config/
     env.ts            public, build-time-inlined configuration (API base URL)
+  features/           feature screens rendered by the routes (feed, bookmarks, stories)
+  navigation/         tab bar, stack, route parsing/hrefs and the external publisher seam
   server-state/       TanStack Query client, account-scoped keys and retry policy
   session/            credential storage, session controller, provider and session UI
+  test-utils/         test-only helpers (outside src/app and outside __tests__)
+  theme/              semantic color, spacing, type and touch-target tokens
 assets/               app icon and splash images
 ```
+
+## Navigation and reading UI
+
+Issue #46 establishes navigation and UI primitives only. The Feed, Saved,
+Story and source routes are **route targets**: each states plainly that its
+content is not available in this build, and #48–#50 replace their bodies. No
+Story, source or bookmark content is fabricated, and there are no Pulse,
+Opinion, profile, explore, search, audio or sharing affordances.
+
+| Path                    | Screen                  | Access                   | Back                                  |
+| ----------------------- | ----------------------- | ------------------------ | ------------------------------------- |
+| `/sign-in`              | Sign-in / restore error | Signed out               | —                                     |
+| `/`                     | Feed tab                | Authenticated            | Leaves the app (Android)              |
+| `/saved`                | Saved tab               | Authenticated            | Feed tab (`backBehavior: firstRoute`) |
+| `/stories/{id}`         | Story                   | Authenticated; resumable | Previous screen, else Feed            |
+| `/stories/{id}/sources` | Story sources           | Authenticated; resumable | Story if opened from it, else Feed    |
+| anything else           | Not found               | Anyone                   | “Go to Feed” action                   |
+
+- **Protection.** All reading routes live in `(app)/`, whose layout renders
+  them only for an authenticated session (#45). A signed-out deep link is
+  remembered only if it matches `/stories/{id}` or `/stories/{id}/sources`;
+  external, encoded or malformed targets are dropped and sign-in lands on Feed.
+- **Cold back.** `(app)/_layout.tsx` sets `initialRouteName: "(tabs)"` and
+  sign-in resumes with `withAnchor`, so a Story opened from a cold deep link or
+  after sign-in always has Feed beneath it.
+- **Android back** is the stack's `goBack`: Story/source screens pop, Saved
+  returns to Feed, and Feed leaves the app. **iOS** uses the native stack
+  header back button and edge-swipe gesture on Story/source screens; the tab
+  bar has no back history. Both are covered by `src/navigation/__tests__/`.
+- **Invalid IDs** (`/stories/abc`, zero, beyond `bigint`) render “This Story
+  link is not valid.” with a “Go to Feed” action instead of throwing or
+  redirecting.
+- **Publisher pages** open through `openPublisherUrl`
+  (`src/navigation/external.ts`), which hands an HTTP(S) URL to the operating
+  system. The in-app route stack is not changed, so returning to Pulso resumes
+  the same screen. No WebView, proxy or Authorization header is involved.
+- **Sign out** is in the header of both tabs, next to the signed-in username.
+
+### Component conventions
+
+Screens compose `src/components/` and read colors from `useTheme()` in
+`src/theme/`; there is no UI framework. Primitives express reading states and
+contain no domain rules (for example, `SourceRow` receives already formatted
+strings; #49 decides “Published” vs “First seen”).
+
+- **Text** (`AppText`) always scales with the platform text size and never
+  truncates; titles and headings are announced as headers. Publication strings
+  are passed as children, so they render as plain text.
+- **Buttons** are at least 44×44, wrap their label at large text, expose
+  disabled/busy states, and draw a visible focus ring for keyboard/web focus.
+  Variants differ by fill, outline or underline, never by color alone.
+- **Status**: `LoadingState` (labelled progress), `ErrorState` (alert text plus
+  retry/exit actions), `EmptyState` (success with nothing to show) and
+  `StatusLabel` (a worded status such as “Updating”).
+- **Layout**: `Screen` applies safe-area edges, scrolls so every control stays
+  reachable with large text on small screens, and wraps its header action below
+  the title. The tab bar grows with the text size instead of clipping labels,
+  and the selected tab shows an indicator bar in addition to its color.
+- **Theme**: light and dark palettes follow the system setting; every text pair
+  meets 4.5:1 and borders/focus meet 3:1 (asserted in
+  `src/theme/__tests__/tokens.test.ts`). Stack transitions are disabled when
+  the platform's reduce-motion setting is on.
+- **Sign-in keyboard**: the form scrolls above the keyboard, “next” on the
+  username moves to the password, and “go” on the password submits.
+
+Manual screen-reader and large-text checks on native targets are recorded in
+#52.
 
 ## API and server-state boundary
 
@@ -231,6 +311,15 @@ placed directly in `src/app` becomes a real, navigable, exported route
 Discovered via `npx expo export --platform web` during issue #10's
 fresh-checkout walkthrough; keep any future `src/app/**` test alongside
 its screen but inside a `__tests__` folder, never a bare sibling file.
+Metro's default exclusion list blocks `__tests__` directories, and
+`src/navigation/__tests__/route-files.test.ts` fails if a test or non-route
+helper appears elsewhere in `src/app`. Verify discovery with:
+
+```bash
+npx expo export --platform web --output-dir /tmp/pulso-web
+# "Static routes" must list only /, /saved, /sign-in, /stories/[storyId],
+# /stories/[storyId]/sources, +not-found and _sitemap (plus their group aliases).
+```
 
 ## Quality and testing
 
@@ -268,12 +357,15 @@ page cap. Session tests drive the real transport against a scripted fake of
 the auth endpoints (restore, parallel 401, repeated 401, terminal and transient
 refresh failures, logout failures, storage failures and account-switch races),
 and render the sign-in screen and protected routing with
-`expo-router/testing-library`.
+`expo-router/testing-library`. Navigation tests mount the real route modules
+(`src/test-utils/readingApp.tsx`) to cover the two tabs, return routes, cold
+and Android back, invalid IDs, not-found and publisher hand-off; component and
+theme tests cover roles, states, touch targets, focus, wrapping and contrast.
 
 The original bootstrap tests still verify:
 
-- `src/app/(app)/__tests__/index.test.tsx` renders the signed-in landing screen
-  and its sign-out action.
+- `src/app/(app)/(tabs)/__tests__/index.test.tsx` renders the signed-in Feed
+  route target and its sign-out action.
   `@testing-library/react-native`'s `render` is asynchronous (`await
 render(...)`) as of v14; a call site that forgets `await` fails with a
   clear "`render` function has not been called" error rather than a silent

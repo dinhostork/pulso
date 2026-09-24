@@ -16,7 +16,8 @@ export default function SignInRoute() {
   useEffect(() => {
     if (!authenticated) return;
     // Only a validated in-app path can have been remembered (see session/routes.ts).
-    router.replace((controller.consumeReturnRoute() ?? "/") as Href);
+    // The anchor mounts the Feed tabs beneath a resumed Story, so back returns to Feed.
+    router.replace((controller.consumeReturnRoute() ?? "/") as Href, { withAnchor: true });
   }, [authenticated, controller, router]);
 
   switch (state.status) {

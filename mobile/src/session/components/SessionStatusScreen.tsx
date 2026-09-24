@@ -1,4 +1,8 @@
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import type { ReactNode } from "react";
+import { SafeAreaView } from "react-native-safe-area-context";
+
+import { ErrorState, LoadingState } from "@/components/StatusState";
+import { spacing, useTheme } from "@/theme";
 
 import type { SessionErrorCode } from "../types";
 
@@ -8,12 +12,20 @@ const RESTORE_MESSAGES: Partial<Record<SessionErrorCode, string>> = {
   credential_read_failed: "This device could not read its stored session.",
 };
 
+function StatusFrame({ children }: { children: ReactNode }) {
+  const { colors } = useTheme();
+  return (
+    <SafeAreaView style={{ flex: 1, padding: spacing.lg, backgroundColor: colors.background }}>
+      {children}
+    </SafeAreaView>
+  );
+}
+
 export function SessionProgressScreen({ label }: { label: string }) {
   return (
-    <View style={styles.container}>
-      <ActivityIndicator accessibilityLabel={label} size="large" />
-      <Text style={styles.message}>{label}</Text>
-    </View>
+    <StatusFrame>
+      <LoadingState label={label} />
+    </StatusFrame>
   );
 }
 
@@ -27,32 +39,12 @@ export function RestoreErrorScreen({
   onSignOut: () => void;
 }) {
   return (
-    <View style={styles.container}>
-      <Text accessibilityRole="alert" style={styles.message}>
-        {RESTORE_MESSAGES[code] ?? "Your session could not be restored."}
-      </Text>
-      <Pressable accessibilityRole="button" onPress={onRetry} style={styles.button}>
-        <Text style={styles.buttonText}>Try again</Text>
-      </Pressable>
-      <Pressable accessibilityRole="button" onPress={onSignOut} style={styles.secondaryButton}>
-        <Text style={styles.secondaryButtonText}>Sign out</Text>
-      </Pressable>
-    </View>
+    <StatusFrame>
+      <ErrorState
+        message={RESTORE_MESSAGES[code] ?? "Your session could not be restored."}
+        primary={{ label: "Try again", onPress: onRetry }}
+        secondary={{ label: "Sign out", onPress: onSignOut }}
+      />
+    </StatusFrame>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, alignItems: "center", justifyContent: "center", gap: 16, padding: 24 },
-  message: { fontSize: 16, textAlign: "center" },
-  button: {
-    alignItems: "center",
-    alignSelf: "stretch",
-    backgroundColor: "#208AEF",
-    borderRadius: 8,
-    minHeight: 44,
-    justifyContent: "center",
-  },
-  buttonText: { color: "#FFFFFF", fontSize: 16, fontWeight: "600" },
-  secondaryButton: { alignItems: "center", minHeight: 44, justifyContent: "center" },
-  secondaryButtonText: { color: "#208AEF", fontSize: 16 },
-});

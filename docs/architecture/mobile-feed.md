@@ -389,7 +389,10 @@ credential persistence, single-flight refresh, epoch-guarded account isolation
 and protected routing in `mobile/src/session/` (see
 [mobile/README.md](../../mobile/README.md#session-and-sign-in)); its
 `subscribeSessionChanges` hook is the account-change signal for exposure queue
-delivery, which remains owned by #51.
+delivery, which remains owned by #51. Issue #46 adds the Feed/Saved tab layout, the
+protected Story/source routes with Feed as their back target, the external
+publisher hand-off seam, and the shared accessible UI primitives
+(`mobile/src/components/`, `mobile/src/theme/`).
 
 Native Android/iOS reading behavior is the Phase 3 acceptance target. Web must
 continue to compile/render, but production browser CORS and deployment are

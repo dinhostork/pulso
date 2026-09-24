@@ -1,5 +1,10 @@
-import { useState } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { useRef, useState } from "react";
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+
+import { AppText } from "@/components/AppText";
+import { Button } from "@/components/Button";
+import { MIN_TOUCH_TARGET, radius, spacing, typography, useTheme } from "@/theme";
 
 import type { SessionErrorCode, SessionNotice, SessionState } from "../types";
 
@@ -46,6 +51,8 @@ export function SignInScreen({
 }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const passwordInput = useRef<TextInput>(null);
+  const { colors } = useTheme();
   const busy = state.status === "signing_in";
   const canSubmit = !busy && username.trim().length > 0 && password.length > 0;
   const error = state.status === "sign_in_error" ? ERROR_MESSAGES[state.error.code] : undefined;
@@ -62,91 +69,82 @@ export function SignInScreen({
   }
 
   return (
-    <View style={styles.container}>
-      <Text accessibilityRole="header" style={styles.title}>
-        Sign in to Pulso
-      </Text>
-      {notice ? (
-        <Text accessibilityLiveRegion="polite" style={styles.notice}>
-          {notice}
-        </Text>
-      ) : null}
-      {cleanupFailed ? (
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => void onRetryCleanup()}
-          style={styles.secondaryButton}
-        >
-          <Text style={styles.secondaryButtonText}>Retry removing stored session</Text>
-        </Pressable>
-      ) : null}
-      <TextInput
-        accessibilityLabel="Username"
-        autoCapitalize="none"
-        autoComplete="username"
-        autoCorrect={false}
-        editable={!busy}
-        onChangeText={setUsername}
-        placeholder="Username"
-        style={styles.input}
-        textContentType="username"
-        value={username}
-      />
-      <TextInput
-        accessibilityLabel="Password"
-        autoCapitalize="none"
-        autoComplete="current-password"
-        autoCorrect={false}
-        editable={!busy}
-        onChangeText={setPassword}
-        onSubmitEditing={() => void submit()}
-        placeholder="Password"
-        secureTextEntry
-        style={styles.input}
-        textContentType="password"
-        value={password}
-      />
-      {error ? (
-        <Text accessibilityLiveRegion="assertive" accessibilityRole="alert" style={styles.error}>
-          {error}
-        </Text>
-      ) : null}
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ disabled: !canSubmit, busy }}
-        disabled={!canSubmit}
-        onPress={() => void submit()}
-        style={[styles.button, !canSubmit && styles.buttonDisabled]}
+    <SafeAreaView style={[styles.fill, { backgroundColor: colors.background }]}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={styles.fill}
       >
-        <Text style={styles.buttonText}>{busy ? "Signing in…" : "Sign in"}</Text>
-      </Pressable>
-    </View>
+        {/* Scrolls under the keyboard and at large text so every control stays reachable. */}
+        <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+          <AppText variant="title">Sign in to Pulso</AppText>
+          {notice ? <AppText accessibilityLiveRegion="polite">{notice}</AppText> : null}
+          {cleanupFailed ? (
+            <Button
+              label="Retry removing stored session"
+              onPress={() => void onRetryCleanup()}
+              variant="secondary"
+            />
+          ) : null}
+          <TextInput
+            accessibilityLabel="Username"
+            autoCapitalize="none"
+            autoComplete="username"
+            autoCorrect={false}
+            editable={!busy}
+            onChangeText={setUsername}
+            onSubmitEditing={() => passwordInput.current?.focus()}
+            placeholder="Username"
+            placeholderTextColor={colors.textMuted}
+            returnKeyType="next"
+            submitBehavior="submit"
+            style={[styles.input, { borderColor: colors.border, color: colors.text }]}
+            textContentType="username"
+            value={username}
+          />
+          <TextInput
+            accessibilityLabel="Password"
+            autoCapitalize="none"
+            autoComplete="current-password"
+            autoCorrect={false}
+            editable={!busy}
+            onChangeText={setPassword}
+            onSubmitEditing={() => void submit()}
+            placeholder="Password"
+            placeholderTextColor={colors.textMuted}
+            ref={passwordInput}
+            returnKeyType="go"
+            secureTextEntry
+            style={[styles.input, { borderColor: colors.border, color: colors.text }]}
+            textContentType="password"
+            value={password}
+          />
+          {error ? (
+            <AppText accessibilityLiveRegion="assertive" accessibilityRole="alert" tone="danger">
+              {error}
+            </AppText>
+          ) : null}
+          <Button
+            busy={busy}
+            disabled={!canSubmit}
+            label={busy ? "Signing in…" : "Sign in"}
+            onPress={() => void submit()}
+            stretch
+          />
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: "center", gap: 12, padding: 24 },
-  title: { fontSize: 24, fontWeight: "600", marginBottom: 8 },
-  notice: { fontSize: 14, color: "#444444" },
+  fill: { flex: 1 },
+  container: { flexGrow: 1, justifyContent: "center", gap: spacing.md, padding: spacing.lg },
   input: {
     borderWidth: 1,
-    borderColor: "#999999",
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 16,
-    minHeight: 44,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    minHeight: MIN_TOUCH_TARGET,
+    ...typography.body,
   },
-  error: { fontSize: 14, color: "#B00020" },
-  button: {
-    alignItems: "center",
-    backgroundColor: "#208AEF",
-    borderRadius: 8,
-    minHeight: 44,
-    justifyContent: "center",
-  },
-  buttonDisabled: { opacity: 0.5 },
-  buttonText: { color: "#FFFFFF", fontSize: 16, fontWeight: "600" },
-  secondaryButton: { alignItems: "center", minHeight: 44, justifyContent: "center" },
-  secondaryButtonText: { color: "#208AEF", fontSize: 16 },
 });

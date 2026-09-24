@@ -30,6 +30,23 @@ describe("SignInScreen", () => {
     expect(screen.getByLabelText("Password").props.value).toBe("");
   });
 
+  it("moves from username to password and submits from the keyboard", async () => {
+    const { onSubmit } = await renderSignIn();
+    const username = screen.getByLabelText("Username");
+    const password = screen.getByLabelText("Password");
+    expect(username.props.returnKeyType).toBe("next");
+    expect(username.props.submitBehavior).toBe("submit");
+    expect(password.props.returnKeyType).toBe("go");
+
+    await fireEvent.changeText(username, "reader");
+    await fireEvent(username, "submitEditing");
+    expect(onSubmit).not.toHaveBeenCalled();
+    await fireEvent.changeText(password, "secret");
+    await fireEvent(password, "submitEditing");
+
+    expect(onSubmit).toHaveBeenCalledWith("reader", "secret");
+  });
+
   it("shows one generic alert for rejected credentials", async () => {
     await renderSignIn({
       status: "sign_in_error",

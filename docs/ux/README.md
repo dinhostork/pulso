@@ -66,6 +66,39 @@ and invented “why it matters” content. Empty placeholders for these later
 features must not ship. The supported detail label is “Context”; synthesis and
 publication/first-seen times remain explicitly distinct.
 
+### Phase 3 route and state map
+
+Issue #46 fixed the navigation shell; later issues fill each route.
+
+```mermaid
+flowchart LR
+    SignIn["Sign in"] -->|authenticated| Tabs
+    subgraph Tabs["Tabs (only two)"]
+        Feed["Feed /"]
+        Saved["Saved /saved"]
+    end
+    Feed --> Story["Story /stories/{id}"]
+    Saved --> Story
+    Story --> Sources["Sources /stories/{id}/sources"]
+    Sources -->|OS browser| Publisher["Publisher page"]
+    Story -. back .-> Feed
+    Sources -. back .-> Story
+```
+
+| Screen  | States (owning issue)                                                                     |
+| ------- | ----------------------------------------------------------------------------------------- |
+| Feed    | loading, first-load error, refresh error, empty, page-footer error, restart after cap (#48) |
+| Story   | loading, error, current, updating, preparing, unavailable, invalid link (#49; invalid link #46) |
+| Sources | loading, error, page, context changed, link unavailable (#49)                             |
+| Saved   | loading, empty, error, normal, preparing/updating, unavailable tombstone (#50)            |
+| Any     | signed out → sign-in with validated return; unknown path → not found (#45/#46)            |
+
+A cold deep link to a Story or its sources, including one resumed after
+sign-in, has Feed beneath it, so back returns to Feed. Opening a publisher
+leaves the in-app route unchanged. See the
+[mobile README](../../mobile/README.md#navigation-and-reading-ui) for Android
+back, iOS stack behavior and the component conventions.
+
 Source count means distinct publisher identities in the stated scope. It does
 not mean independent verification. A one-source Story is valid, and missing
 byline, publication time, Topic, Summary or Context has an explicit absence

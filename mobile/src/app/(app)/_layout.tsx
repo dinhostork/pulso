@@ -1,6 +1,7 @@
-import { Redirect, Stack, usePathname } from "expo-router";
+import { Redirect, usePathname } from "expo-router";
 import { useEffect } from "react";
 
+import { ReadingStack } from "@/navigation/ReadingStack";
 import {
   RestoreErrorScreen,
   SessionProgressScreen,
@@ -15,13 +16,16 @@ function SignInRedirect({ returnRoute }: { returnRoute: string | null }) {
   return <Redirect href="/sign-in" />;
 }
 
+/** A cold Story/source deep link still has the tabs beneath it, so back returns to Feed. */
+export const unstable_settings = { initialRouteName: "(tabs)" };
+
 /** Product screens render only for an identified account; every other state stays outside. */
 export default function ProtectedLayout() {
   const { state, controller } = useSession();
   const pathname = usePathname();
   switch (state.status) {
     case "authenticated":
-      return <Stack screenOptions={{ headerShown: false }} />;
+      return <ReadingStack />;
     case "cold":
     case "restoring":
       return <SessionProgressScreen label="Restoring your session" />;
