@@ -2,14 +2,15 @@
 
 ## Status and scope
 
-This document is the executable contract for Phase 3 (Mobile Feed). Sections
-marked **contract** describe behavior owned by issues #40–#52; they are not a
-claim that every behavior is already implemented. Issue #41 implements the
-News-owned factual read DTOs/selectors and cursor primitives, #42/#43 the
-Reading models, #44/#45 the mobile API client and sessions, #46 mobile
-navigation, and #47 the authenticated feed, Story detail and source HTTP
-endpoints with viewer decoration. Feed, detail, Saved and exposure screens
-remain owned by #48–#51.
+This document is the contract for Phase 3 (Mobile Feed), issues #40–#52, and
+describes the implemented system. #41 implements the News-owned factual read
+DTOs/selectors and cursor primitives, #42/#43 the Reading models, #44/#45 the
+mobile API client and sessions, #46 mobile navigation, #47 the authenticated
+feed, Story detail and source HTTP endpoints with viewer decoration, #48–#51
+the Feed, detail/source, Saved and exposure screens, and #52 the cross-layer
+integration tests and acceptance record. Native acceptance evidence, the
+platform exception for iOS and the known limitations are in the
+[Phase 3 acceptance record](../acceptance/phase-3-mobile-feed.md).
 
 Phase 3 delivers authenticated factual Story reading, source navigation,
 bookmarks, and qualified feed-exposure reporting. Opinion, Position,
@@ -416,8 +417,8 @@ remains appropriate for session and transient UI. There is no persistent query
 cache.
 
 Retry ownership is singular: TanStack Query owns bounded read retry; the auth
-session owns at most one refresh/replay; the future impression queue owns its
-own delivery retry. Transport does not blindly retry POST.
+session owns at most one refresh/replay; the impression queue (#51) owns its
+own delivery retry; bookmark writes (#50) never retry on their own. Transport does not blindly retry POST.
 
 Issue #44 implements this boundary in `mobile/src/api/` and
 `mobile/src/server-state/`. Native fetch accepts approved relative product and
@@ -458,10 +459,36 @@ follows the server cursor chain and keeps archived entries as removable
 tombstones; the server remains the only Bookmark authority (see
 [mobile/README.md](../../mobile/README.md#saved-and-bookmarks)).
 
-Native Android/iOS reading behavior is the Phase 3 acceptance target. Web must
-continue to compile/render, but production browser CORS and deployment are
-deferred. Native refresh credentials use secure platform storage, access
-tokens remain in memory, and web credentials are memory-only (ADR-0009).
+Native Android/iOS reading behavior is the Phase 3 acceptance target; it was
+accepted on a physical Android device, and iOS remains unverified (see the
+acceptance record). Web builds and renders with in-memory credentials, but the
+backend has no CORS configuration, so browser use of a cross-origin API is not
+supported; production browser deployment is deferred. Native refresh
+credentials use secure platform storage, access tokens remain in memory, and
+web credentials are memory-only (ADR-0009).
+
+### Reading loop integration (#52)
+
+`backend/tests/reading/test_reading_loop.py` carries the recorded Story corpus
+through the real Story services and then the authenticated HTTP API, and
+produces the backend-validated fixture
+[`reading-loop.json`](../contracts/mobile-feed/README.md) that the mobile
+integration suite decodes and renders:
+
+```mermaid
+flowchart LR
+    Corpus[Recorded corpus] --> Services[Story services]
+    Services --> Read[News read DTOs]
+    Read --> HTTP[Reading/News HTTP]
+    HTTP --> Fixture[reading-loop.json]
+    Fixture --> Decode[Mobile decoders]
+    Decode --> Row[Displayed source row]
+```
+
+Story IDs are durable user references from Phase 3 on: ordinary reprocessing
+keeps them, an emptied Story is archived rather than deleted, and a bookmarked
+archived Story appears as a Saved tombstone. Merge/split redirects are future
+work with their own policy.
 
 ## Labels and time/count meanings
 
@@ -482,7 +509,9 @@ They cover CURRENT multi/single-source responses, missing optional fields,
 UPDATING, PREPARING, unavailable/error shapes, pages, and mutation outcomes.
 #41 validates News serialization against them; #42/#43 validate Reading
 contracts; #44 validates mobile decoders; #47 validates HTTP adapters; #51
-owns impression delivery behavior.
+owns impression delivery behavior; #52's `reading-loop.json` is produced by
+the backend from the recorded corpus and consumed by the mobile integration
+suite.
 
 ## Security, diagnostics, and future boundaries
 

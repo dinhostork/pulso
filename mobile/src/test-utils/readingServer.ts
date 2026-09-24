@@ -60,6 +60,8 @@ export interface ReadingServerOptions {
   savedPageSize?: number;
   /** Bookmarks that already exist, per username, newest first. */
   saved?: Record<string, string[]>;
+  /** A Story's source page; by default one generated current source. */
+  sources?: Record<string, unknown>;
 }
 
 export function readingServer(options: ReadingServerOptions = {}) {
@@ -175,9 +177,8 @@ export function readingServer(options: ReadingServerOptions = {}) {
       }
       const story = stories.get(storyId);
       if (!story) return json({ code: "story_not_found", detail: "The Story was not found." }, 404);
-      return sources
-        ? json(sourcesPage([sourceArticle(`${storyId}01`)]))
-        : json(decorated(story, user));
+      if (!sources) return json(decorated(story, user));
+      return json(options.sources?.[storyId] ?? sourcesPage([sourceArticle(`${storyId}01`)]));
     }
     if (method === "POST" && path === "/api/feed-impressions") {
       const events = (request.body as { events: FeedImpressionEvent[] }).events;

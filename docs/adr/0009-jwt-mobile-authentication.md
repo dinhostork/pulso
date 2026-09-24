@@ -30,8 +30,7 @@ Native app:
   database round trip on every single request, given the API also serves
   Celery-adjacent, potentially latency-sensitive traffic (ADR-0005).
 
-The Foundation plan (`not_shared/planning/v0.1.0-foundation-issues.md`,
-FND-06) frames this explicitly: *"Evaluate relevant session and token/JWT
+The Foundation plan (item FND-06) frames this explicitly: *"Evaluate relevant session and token/JWT
 alternatives and record a new ADR if the tradeoffs warrant one. No
 mechanism is selected by this plan."* This ADR is that evaluation.
 
@@ -171,9 +170,18 @@ The state diagram, storage table and web limitation are documented in
 Logout blacklists the **refresh token** in PostgreSQL
 (`OutstandingToken`/`BlacklistedToken`, from `token_blacklist`). It does
 **not** retroactively invalidate an already-issued **access** token: access
-tokens are verified purely by signature and `exp`, with no per-request
-database lookup, by design — that statelessness is the entire reason to
+tokens are verified by signature and `exp`, with no per-request session or
+revocation lookup, by design — that statelessness is the entire reason to
 prefer JWTs over a DB-backed session token for this API.
+
+> **Correction (#52).** This ADR originally said access tokens need no
+> per-request database lookup at all. The configured
+> `rest_framework_simplejwt.authentication.JWTAuthentication` does load the
+> token's User row on every authenticated request (and rejects an inactive
+> account); what it does not do is look up a session or a revocation list.
+> Measured query budgets therefore include one user lookup per request (see
+> [Mobile Feed architecture](../architecture/mobile-feed.md#http-adapters-47)).
+> The decision and the residual-validity window below are unchanged.
 
 The recorded, tested contract is therefore:
 
@@ -187,7 +195,7 @@ after logout:
 
 This is a **documented residual-validity window of up to 15 minutes**, not
 an oversight: the alternative (checking every access token against a
-revocation list on every request) reintroduces the per-request DB lookup
+revocation list on every request) adds the per-request revocation lookup
 this decision exists to avoid, for a foundation-scoped API with no
 sensitive product data yet. `tests/test_authentication.py`'s
 `test_logout_does_not_revoke_an_already_issued_unexpired_access_token`
@@ -323,8 +331,9 @@ entirely; "logout" would mean only "the client discards its tokens."
 
 ### Positive
 
-- no per-request database lookup to authenticate an ordinary API call —
-  only login, refresh and logout touch the database for auth purposes;
+- no per-request session or revocation lookup to authenticate an ordinary
+  API call — besides the User row the authentication class loads, only
+  login, refresh and logout touch the database for auth purposes;
 - expiry and revocation are both natively supported and independently
   testable without waiting on a real clock (`AccessToken.set_exp`, refresh
   blacklisting);
@@ -473,7 +482,7 @@ third-party identity provider.
 ```mermaid
 flowchart LR
     Mobile["No cookie jar,<br/>no CSRF"]
-    Stateless["No per-request<br/>DB lookup"]
+    Stateless["No per-request<br/>session/revocation lookup"]
     Testable["Expiry + logout<br/>independently testable"]
 
     Decision["JWT bearer auth<br/>+ refresh-token blacklist"]

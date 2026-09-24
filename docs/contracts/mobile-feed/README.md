@@ -16,6 +16,15 @@ decoders must validate against the same files.
 | `errors.json`                      | Product error/status shapes                                         |
 | `bookmark.json`                    | Idempotent bookmark result and unavailable saved tombstone          |
 | `feed-impressions.json`            | Proposed batch shape and per-event results                          |
+| `reading-loop.json`                | Backend output for a recorded-corpus Story: detail, card, sources and an UPDATING detail citing an Article that left it (#52) |
+
+`reading-loop.json` is generated, not hand-written: the backend suite
+`tests/reading/test_reading_loop.py` serializes a Story built from the recorded
+corpus through the real HTTP views, renumbers database IDs per kind and pins
+`created_at`/`synthesized_at`, then fails if the file differs. After an
+intended contract change, regenerate it with
+`PULSO_WRITE_READING_LOOP_FIXTURE=1 uv run --locked pytest tests/reading/test_reading_loop.py`
+from `backend/`.
 
 IDs are decimal strings deliberately, including values beyond JavaScript's
 safe integer range. Dates are UTC ISO-8601 strings. Fixtures may be copied into

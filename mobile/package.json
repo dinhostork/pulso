@@ -41,7 +41,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "jest",
-    "test:ci": "jest --ci --watchAll=false --passWithNoTests"
+    "test:ci": "jest --ci --watchAll=false"
   },
   "private": true,
   "jest": {

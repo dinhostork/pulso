@@ -68,7 +68,9 @@ publication/first-seen times remain explicitly distinct.
 
 ### Phase 3 route and state map
 
-Issue #46 fixed the navigation shell; later issues fill each route.
+Issue #46 fixed the navigation shell and #48–#51 implemented every route
+below; the [Phase 3 acceptance record](../acceptance/phase-3-mobile-feed.md)
+states which behavior was verified natively.
 
 ```mermaid
 flowchart LR
@@ -90,7 +92,8 @@ flowchart LR
 | Feed    | loading, first-load error, refresh error, empty, page-footer error, restart after cap (#48) |
 | Story   | loading, error, current, updating, preparing, unavailable, invalid link (#49; invalid link #46) |
 | Sources | loading, error, page, context changed, link unavailable (#49)                             |
-| Saved   | loading, empty, error, normal, preparing/updating, unavailable tombstone (#50)            |
+| Saved   | loading, empty (also after removing the last row), first-load error, refresh error, page-footer error, expired list, normal, preparing/updating, unavailable tombstone with remove (#50) |
+| Bookmark action (Feed, Story, Saved) | save/remove, busy while a write for that Story is pending, not saved/removed with retry, unconfirmed with retry of the same action, unavailable/not found (#50) |
 | Any     | signed out → sign-in with validated return; unknown path → not found (#45/#46)            |
 
 A cold deep link to a Story or its sources, including one resumed after
@@ -702,6 +705,9 @@ The primary MVP UX includes:
 | Position History UI | Later |
 
 The data model may support some later experiences before their dedicated UI is implemented.
+
+Phase 3 implements Feed, Story Details, Source access and Bookmark (Saved).
+The remaining MVP experiences belong to later phases and have no UI yet.
 
 ---
 

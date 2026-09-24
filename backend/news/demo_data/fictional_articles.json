@@ -1,0 +1,66 @@
+{
+  "notice": "Fictional publications and reporting for local demos only. Every name, place, person and URL is invented; the .example domains never resolve.",
+  "sources": [
+    {"slug": "fictional-calder-ledger", "name": "The Calder Ledger (fictional)", "homepage_url": "https://calder-ledger.example/"},
+    {"slug": "fictional-wrenfield-gazette", "name": "Wrenfield Gazette (fictional)", "homepage_url": "https://wrenfield-gazette.example/"},
+    {"slug": "fictional-northmark-wire", "name": "Northmark Wire (fictional)", "homepage_url": "https://northmark-wire.example/"}
+  ],
+  "articles": [
+    {
+      "id": "calder-ferry-01",
+      "source": "fictional-calder-ledger",
+      "minutes_ago": 300,
+      "title": "Port Calder ferry service suspended after engine fault",
+      "body": "The Port Calder ferry authority suspended crossings to Hale Island on Tuesday after an engine fault on its only vessel. Operations chief Mira Tansey said repairs could take three days and that a replacement boat is being sought."
+    },
+    {
+      "id": "calder-ferry-02",
+      "source": "fictional-wrenfield-gazette",
+      "minutes_ago": 240,
+      "title": "Hale Island cut off as Port Calder ferry is suspended",
+      "body": "Residents of Hale Island face three days without the Port Calder ferry after an engine fault, the ferry authority said on Tuesday. Mira Tansey, its operations chief, said a replacement boat is being sought."
+    },
+    {
+      "id": "calder-ferry-03",
+      "source": "fictional-northmark-wire",
+      "minutes_ago": 120,
+      "title": "Replacement boat found for suspended Port Calder ferry",
+      "body": "The Port Calder ferry authority said a replacement boat will resume limited crossings to Hale Island on Wednesday after Tuesday's engine fault suspended service. Mira Tansey said the regular vessel remains under repair."
+    },
+    {
+      "id": "wrenfield-library-01",
+      "source": "fictional-wrenfield-gazette",
+      "minutes_ago": 200,
+      "title": "Wrenfield council approves new central library",
+      "body": "Wrenfield town council voted seven to two on Monday to build a new central library on the former market site. Councillor Idris Vale said construction would begin next spring."
+    },
+    {
+      "id": "wrenfield-library-02",
+      "source": "fictional-calder-ledger",
+      "minutes_ago": 150,
+      "title": "Wrenfield votes to build central library on market site",
+      "body": "Wrenfield's council approved a new central library on the former market site in a seven to two vote on Monday. Councillor Idris Vale said building work would start next spring."
+    },
+    {
+      "id": "ostry-rainfall-01",
+      "source": "fictional-northmark-wire",
+      "minutes_ago": 180,
+      "title": "Ostry Valley records wettest September day",
+      "body": "The Ostry Valley weather station recorded its wettest September day on Sunday, with rivers rising near Bellmoor. Forecaster Anneke Lusk said further rain was expected on Monday."
+    },
+    {
+      "id": "ostry-rainfall-02",
+      "source": "fictional-calder-ledger",
+      "minutes_ago": 90,
+      "title": "Rivers rise near Bellmoor after record Ostry Valley rain",
+      "body": "Rivers near Bellmoor rose on Sunday after the Ostry Valley weather station recorded its wettest September day. Anneke Lusk, a forecaster, said more rain was expected on Monday."
+    },
+    {
+      "id": "northmark-chess-01",
+      "source": "fictional-northmark-wire",
+      "minutes_ago": 60,
+      "title": "Northmark hosts regional junior chess final",
+      "body": "Northmark school hall hosted the regional junior chess final on Saturday, won by fourteen-year-old Tove Harlan after a rapid tiebreak. Organisers said forty players took part."
+    }
+  ]
+}

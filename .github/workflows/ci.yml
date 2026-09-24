@@ -178,3 +178,15 @@ jobs:
       - name: Tests (non-interactive)
         working-directory: mobile
         run: npm run test:ci
+
+      # Builds the web bundle (web must keep compiling) and fails if any route
+      # beyond the Phase 3 set is exported, e.g. a test or helper under src/app.
+      - name: Web export route check
+        working-directory: mobile
+        run: |
+          npx expo export --platform web --output-dir "$RUNNER_TEMP/pulso-web"
+          cd "$RUNNER_TEMP/pulso-web"
+          printf '%s\n' +not-found.html _sitemap.html index.html saved.html sign-in.html \
+            'stories/[storyId].html' 'stories/[storyId]/sources.html' | sort > "$RUNNER_TEMP/expected-routes.txt"
+          find . -name '*.html' | sed -E 's#\((app|tabs)\)/##g; s#^\./##' | sort -u > "$RUNNER_TEMP/routes.txt"
+          diff "$RUNNER_TEMP/expected-routes.txt" "$RUNNER_TEMP/routes.txt"

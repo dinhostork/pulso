@@ -171,7 +171,7 @@ docker compose --env-file backend/.env --profile beat rm -f beat
 Enabling Beat with `NEWS_INGESTION_ENABLED=true` (its default) also schedules
 `news-poll-due-endpoints` and `news-reconcile-pending`; with no Sources
 configured both are no-ops. See the
-[News ingestion orchestration](../backend/README.md#news-ingestion-orchestration)
+[News ingestion](../backend/README.md#news-ingestion)
 section for the schedule, retry policy and operator commands.
 
 ### Optional: ingest a demo source (requires external network)
@@ -229,10 +229,36 @@ screencap` shows the real rendered screen — "Pulso" / "Mobile application
 shell" / "API base URL: http://localhost:8000" — with the backend **not
 running** at the time, confirming the "no network call on startup" claim
 above by absence of any error/timeout, not just by reading the source.
-`adb logcat` showed no fatal error or crash. Screenshot kept as evidence
-in `not_shared/validation/issue10/android-emulator-render.png` — that
-whole directory is git-ignored (`not_shared/` in the root `.gitignore`),
-the repository's existing convention for local validation artifacts.
+`adb logcat` showed no fatal error or crash. The screenshot was kept as
+local validation evidence and is not committed.
+
+### 9. Read Stories on a device (Phase 3)
+
+The shell above has since become the Mobile Feed. To read real Stories:
+
+1. Provision an account (step 5). For data, either ingest real sources (the
+   optional step above plus Story processing with the local embedding model),
+   or add the fictional demo set with the explicit
+   [local reading demo](../backend/README.md#local-reading-demo-fictional-data).
+   Nothing is seeded automatically, and the app never substitutes demo or
+   fixture data when the API fails.
+2. Make the backend reachable from the device. It publishes on
+   `127.0.0.1:8000` only, and a Metro tunnel serves the JavaScript bundle, not
+   the API. For a USB-connected Android phone:
+
+   ```bash
+   adb reverse tcp:8000 tcp:8000
+   echo 'EXPO_PUBLIC_API_BASE_URL=http://127.0.0.1:8000' > mobile/.env
+   ```
+
+   For the emulator, other targets and deliberate LAN exposure, see the
+   [API base URL table](../mobile/README.md#api-base-url).
+3. `cd mobile && npx expo start`, open it in Expo Go and sign in.
+
+An empty Feed or an "unavailable" screen has a specific cause; see
+[Diagnosing the reading loop](../backend/README.md#diagnosing-the-reading-loop).
+What was verified on a physical device, and what was not, is in the
+[Phase 3 acceptance record](acceptance/phase-3-mobile-feed.md).
 
 ## Quality and test commands
 
@@ -251,7 +277,8 @@ modulo environment differences like a cold Docker image cache.
 | `cd mobile && npm run lint` | `mobile` | ESLint |
 | `cd mobile && npm run format:check` | `mobile` | Prettier |
 | `cd mobile && npm run typecheck` | `mobile` | `tsc --noEmit` |
-| `cd mobile && npm run test:ci` | `mobile` | Jest, non-interactive |
+| `cd mobile && npm run test:ci` | `mobile` | Jest, non-interactive (includes the reading-loop integration suite) |
+| `cd mobile && npx expo export --platform web --output-dir /tmp/pulso-web` | `mobile` | Web build; CI also checks the exported route set |
 
 Backend commands need `postgres-test`/`redis` running first:
 
@@ -290,7 +317,8 @@ side effect that only `expo export` surfaces.
 | `/health/ready` returns 503 | PostgreSQL unreachable/down | Check `docker compose ... logs postgres`; `/health/live` should still be `200` — if it isn't, the process itself is down, not just a dependency |
 | `pytest -m celery_smoke` fails with "No worker consumed the task" | No worker is running against the same (isolated test) Redis DB | Start one first: `DJANGO_SETTINGS_MODULE=config.settings_smoke_worker uv run --locked celery -A config worker --loglevel=INFO` |
 | The News smoke fails with `relation "news_sourceendpoint" does not exist` | The worker was started with `config.settings_test`, so it uses a different database than pytest | Restart it with `DJANGO_SETTINGS_MODULE=config.settings_smoke_worker` (see [backend/README.md](../backend/README.md#automated-real-broker-smoke-check)) |
-| Mobile `expo start` can't reach the backend from an emulator/device | Wrong `EXPO_PUBLIC_API_BASE_URL` for that target | See [mobile/README.md's API base URL table](../mobile/README.md#api-base-url) (`10.0.2.2` for the Android emulator, a LAN IP for a physical device) |
+| The app shows "Feed unavailable" on an emulator/device | Wrong `EXPO_PUBLIC_API_BASE_URL`, backend not reachable from the device, or the host missing from `ALLOWED_HOSTS` | See [mobile/README.md's API base URL table](../mobile/README.md#api-base-url): `adb reverse tcp:8000 tcp:8000` for a USB Android device, `10.0.2.2` (added to `ALLOWED_HOSTS`) for the emulator; a Metro tunnel does not expose the backend |
+| The Feed is empty | No Articles, Story processing not run or missing the local model, or no CURRENT Story | [Diagnosing the reading loop](../backend/README.md#diagnosing-the-reading-loop) |
 | `npm ci` / `uv sync --locked` fails on a lockfile mismatch | `package.json`/`pyproject.toml` changed without regenerating the lockfile | `npm install` / `uv lock`, review the diff, commit both together |
 
 ### Logs

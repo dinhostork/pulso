@@ -1226,8 +1226,10 @@ readiness health endpoints and mobile API authentication. It retains the
 issue #1 custom User and package boundaries. Database runtime validation is
 now possible using Compose; host-only checks still require a reachable
 configured PostgreSQL to verify applied migration history. News ingestion and
-the Story Engine are documented above; the authenticated product read APIs are
-in [Story reads](#story-reads) below.
+the Story Engine are documented above; the authenticated product read APIs,
+Bookmarks and FeedImpressions of the Reading module are in
+[Story reads](#story-reads), [Bookmarks](#bookmarks) and
+[Feed impressions](#feed-impressions) below.
 
 See [module boundaries](../docs/architecture/module-boundaries.md).
 
@@ -1285,27 +1287,45 @@ separate real-worker News smoke remains opt-in with `pytest -m celery_smoke`.
 The Story Engine end-to-end gate (#34) is
 `tests/news/test_story_engine_end_to_end.py`, supported by `story_pipeline.py`.
 It calls the real application services against PostgreSQL/pgvector, processing
-the #26 corpus in publication order and refreshing after each association.
-It asserts exact membership of **12 active Stories / 26 StoryArticle rows**,
-named same-event and false-merge scenarios, final enrichment and embedding,
-source-grounded synthesis, second-pass idempotency, reprocessing, task
-redelivery and controlled concurrency on separate database connections.
-Reprocessing all Articles preserves the 12 active event groups and leaves
-2 archived empty historical Stories, excluded from candidate retrieval.
+the #26/#38 corpus (32 Articles, 16 labeled events) in publication order and
+refreshing after each association. Under matcher revision 3 it asserts exact
+membership of **16 active Stories / 32 StoryArticle rows**, named same-event
+and false-merge scenarios, final enrichment and embedding, source-grounded
+synthesis, second-pass idempotency, reprocessing, task redelivery and
+controlled concurrency on separate database connections. Reprocessing all
+Articles preserves the 16 active event groups and leaves 4 archived empty
+historical Stories, excluded from candidate retrieval. These counts are the
+regression expectation of this fixture and matcher revision, not a production
+property; the historical 26-Article/12-event figures are in the matcher table
+above.
 Historical synthesis generations are allowed; current derived state must be
 unique and share the final membership signature. All five News Core provenance
 tables are compared before and after rebuilding/reprocessing.
 
 `tests/news/test_story_quality.py` scores that full pipeline with the existing
 #26 evaluator. On the **repository-owned synthetic regression corpus**, matcher
-v2 (#36) has precision **1.000**, recall **1.000**, false-merge count/rate
-**0 / 0.000**, false-split count/rate **0 / 0.000**, and **0 unassigned**.
+v3 (#38) has precision **1.000**, recall **1.000** (21/21 same-event pairs),
+false-merge count/rate **0 / 0.000**, false-split count/rate **0 / 0.000**, and
+**0 unassigned**.
 These are exact regression gates: with recorded inputs and deterministic
 execution there is no tolerance; any new split or merge needs deliberate
 re-measurement. Failures identify fixture Article ids, expected event labels,
 actual Story ids and offending pairs. These measurements are not production
-accuracy estimates. Historical v1 and current v2 figures are kept distinct in
-the [corpus README](tests/fixtures/news/stories/README.md#quality-regression-gate).
+accuracy estimates. Historical v1/v2 and current v3 figures are kept distinct
+in the [corpus README](tests/fixtures/news/stories/README.md#quality-regression-gate).
+
+`tests/reading/test_reading_loop.py` (#52) carries the same recorded corpus
+past the Story Engine: it re-checks the 32-Article/16-Story grouping under the
+current matcher, then reads every Story through the authenticated Feed, detail
+and source endpoints with real JWT validation and compares each card, citation
+and source row with the Article, Source and synthesis rows behind it. It also
+covers a stale-generation citation whose Article left the Story, bookmark and
+FeedImpression retries after a lost response, two-account isolation, an
+archived Saved tombstone produced by real reprocessing, and the login → save →
+session restore → remove loop. Provenance and derived Story state are compared
+before and after every read and private write. Its citation output is the
+mobile contract fixture
+[`reading-loop.json`](../docs/contracts/mobile-feed/README.md).
 
 Run just the #34 gates with:
 
@@ -1757,7 +1777,8 @@ curl -s "http://127.0.0.1:8000/api/feed?limit=51" -H "$AUTH"
 
 A publication whose stored URL fails the link-safety rules is returned with
 `"canonical_url": null` and stays attributable by title and Source. Tests:
-`uv run --locked pytest tests/reading/test_story_http.py tests/news/test_story_read.py`.
+`uv run --locked pytest tests/reading/test_story_http.py tests/news/test_story_read.py`,
+and the corpus-backed loop in `tests/reading/test_reading_loop.py`.
 
 ## Feed impressions
 
@@ -1805,3 +1826,85 @@ bounds one run; re-running with the same `--before` resumes where it stopped.
 `--before` may never be later than the `--days` cutoff, so the command cannot
 delete rows still inside retention. Logs record only counts, the cutoff and
 duration.
+
+## Bookmarks
+
+Bookmarks are private Reading state ([ADR-0011](../docs/adr/0011-reading-ownership-and-story-references.md)).
+`PUT` is an idempotent set that keeps the original `saved_at`; `DELETE` is
+idempotent and returns 204 whether or not the Bookmark existed, so a client
+that lost a response can repeat the same request. A Bookmark is not a vote,
+position or popularity signal and never changes Feed order.
+
+```bash
+curl -s -X PUT http://127.0.0.1:8000/api/bookmarks/45 -H "$AUTH" \
+  -H 'Content-Type: application/json' -d '{}'
+# 200 {"story_id":"45","bookmarked":true,"saved_at":"2026-09-19T10:10:00Z"}
+curl -s "http://127.0.0.1:8000/api/bookmarks?limit=20" -H "$AUTH"
+# 200 {"results":[{"story_id":"45","saved_at":"…","availability":"AVAILABLE","story":{…}}],"next_cursor":null}
+curl -s -o /dev/null -w '%{http_code}\n' -X DELETE http://127.0.0.1:8000/api/bookmarks/45 -H "$AUTH"
+# 204
+```
+
+A Saved entry whose Story was archived or emptied is returned as
+`{"story_id","saved_at","availability":"UNAVAILABLE"}` with no facts, until the
+account deletes it; it is never moved to another Story. Saving a missing Story
+returns 404 `story_not_found`, an unavailable one 410 `story_unavailable`.
+Deleting an account cascades its Bookmarks.
+
+## Local reading demo (fictional data)
+
+An explicit, opt-in path for seeing the reading loop on a local stack without
+live feeds. Nothing seeds data at startup, and the app never shows demo or
+fixture content when the API fails.
+
+1. Start the stack and apply migrations ([Build, migrate and start](#build-migrate-and-start)).
+2. Provision a separate local account ([Local account provisioning](#local-account-provisioning));
+   choose its password yourself. No demo password exists in the repository.
+3. Add the fictional publications. The command is a dry run until `--apply`,
+   creates only rows that are missing (matched by Source slug and Article URL),
+   never updates or deletes anything, and is bounded to the eight Articles in
+   `news/demo_data/fictional_articles.json`. Their three `fictional-*` Sources
+   use inactive `.example` endpoints that are never fetched.
+
+   ```bash
+   uv run --locked --env-file .env python manage.py news_demo_articles
+   # fictional sources: 3 (3 missing); articles: 8 (8 missing)
+   # Dry run: nothing was written. Re-run with --apply to create them.
+   uv run --locked --env-file .env python manage.py news_demo_articles --apply
+   ```
+
+4. Turn them into Stories with the normal Story pipeline. This uses the
+   configured embedding provider, so it needs the optional local model
+   ([Providers](#providers)); without it processing records
+   `PROVIDER_FAILED` and no Story appears, which is the honest outcome.
+
+   ```bash
+   uv run --locked --group embeddings --env-file .env python manage.py news_story_reconcile
+   uv run --locked --group embeddings --env-file .env python manage.py news_story_refresh --stale-failed
+   ```
+
+5. Sign in from the app with the account from step 2.
+
+Grouping is whatever the configured pipeline decides; the demo asserts no
+particular Story count. Re-running steps 3–4 is harmless. There is no reset
+command: to discard the demo, use a disposable Compose project (`-p`) or
+remove its rows deliberately.
+
+## Diagnosing the reading loop
+
+Safe diagnostics carry operation names, outcome codes, durations and counts;
+they never include credentials, publisher URLs or reading history.
+
+| Symptom | Likely cause | Check |
+| --- | --- | --- |
+| Empty Feed ("No Stories yet") | No Articles yet | `python manage.py news_runs` shows no successful ingestion; add Sources or the demo above |
+| Empty Feed, Articles exist | Story processing disabled or never run | `NEWS_STORY_PROCESSING_ENABLED` is `false` and no worker/Beat runs; run `news_story_reconcile` |
+| Empty Feed, processing `FAILED` | Missing local embedding model | `python manage.py news_story_backlog` shows `PROVIDER_FAILED`; install the model ([Providers](#providers)) |
+| A Story is missing from the Feed but its detail opens | Its generation is `STALE`/`FAILED` or not yet synthesized (`UPDATING`/`PREPARING` on detail) | `python manage.py news_stories` and `news_story --story ID`; `news_story_refresh --stale-failed` |
+| App shows "Feed unavailable" | Backend unreachable from the device, wrong `EXPO_PUBLIC_API_BASE_URL`, or `DisallowedHost` | Backend logs; see [mobile networking](../mobile/README.md#api-base-url) |
+| Returned to sign-in ("Your session has ended") | Refresh token expired (14 days), blacklisted by logout, or rejected | Sign in again; expected behavior |
+| Detail says "Story unavailable" | Story archived or emptied (410) | `news_story --story ID` shows `ARCHIVED`; its Saved entry is a tombstone |
+| "The publication could not be opened" | No browser handled the link, or the stored URL is withheld as unsafe (`canonical_url: null`) | Device browser settings; the Article's URL in the admin |
+| Exposure events missing | Queued events are in memory only: process death, force quit or sign-out drops them; 3 failed retries drop a batch | Expected v0.4 behavior; no server-side trace exists |
+| FeedImpression table grows | Retention is operator-run | [Retention runbook](#retention-runbook) |
+

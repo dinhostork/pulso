@@ -33,7 +33,7 @@ v0.3 deliberately excludes, as future work and not as partial features:
 - source credibility scoring and fact checking;
 - production deployment.
 
-There is no HTTP surface for Stories: the operator surface is `manage.py`. There is no `StoryUpdate` table, no Story history or event-sourcing framework, no manual association workflow, no distributed lock and no hosted AI provider.
+In v0.3 there was no HTTP surface for Stories: the operator surface is `manage.py`. Phase 3 added the authenticated read endpoints, bookmarks and FeedImpressions on top of this module without changing its behavior (see below). There is no `StoryUpdate` table, no Story history or event-sourcing framework, no manual association workflow, no distributed lock and no hosted AI provider.
 
 Phase 3's planned product read boundary, freshness matrix, DTOs and ownership
 are specified separately in the [Mobile Feed architecture](mobile-feed.md).
@@ -640,10 +640,10 @@ v0.3 adds no ADR.
 
 ## Evolution toward Mobile Feed and the Opinion Engine
 
-**Mobile Feed** (Phase 3) can consume the Story as its event-level object: `ACTIVE` Stories with `CURRENT` refresh state, counters, publication window, current synthesis with element citations, Topics, Entities and member Articles with Source attribution. The feed and Story detail APIs, bookmarks and FeedImpressions do not exist yet. A reader of a `STALE` or `FAILED` Story sees its previous coherent generation.
+**Mobile Feed** (Phase 3, implemented) consumes the Story as its event-level object: `ACTIVE` Stories with `CURRENT` refresh state, counters, publication window, current synthesis with element citations, Topics, Entities and member Articles with Source attribution. A reader of a `STALE` or `FAILED` Story sees its previous coherent generation as `UPDATING`. Story IDs became durable user references: a Bookmark protects its Story row from deletion, ordinary reprocessing keeps IDs, and a Story emptied by reprocessing is archived and shown in Saved as an unavailable tombstone, never retargeted. The "delete every derived row and rebuild" operation therefore applies only to data without such references. `backend/tests/reading/test_reading_loop.py` carries the recorded corpus from these services through the reading API. See the [Mobile Feed architecture](mobile-feed.md).
 
 **Opinion Engine** must preserve the separation this module keeps: Story facts and source-backed context ≠ human Opinion ≠ derived Perspective ([ADR-0006](../adr/0006-opinion-not-equal-perspective.md)). Opinions will reference Stories; they must not write Story membership, synthesis or source evidence.
 
 **Recommendation Engine** may rank which Stories a user discovers, but must not change what a Story says ([ADR-0008](../adr/0008-recommend-stories-not-truth.md)). Story synthesis is already impersonal by construction.
 
-None of these modules is implemented in v0.3.
+The Opinion and Recommendation modules are not implemented; Mobile Feed is (Phase 3).

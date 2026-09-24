@@ -53,11 +53,19 @@ the use cases; `domain/stories.py`, `story_matching.py`, `event_anchors.py`,
 `embeddings.py` and `enrichment.py` hold its pure rules; `adapters/` supplies
 the local and deterministic embedding providers, the rule-based extractor and
 the extractive synthesizer. See the [Story Engine architecture](story-engine.md).
-The route registry is the integration point for future HTTP adapters; it must
-not accumulate domain rules. No Story HTTP API exists yet. Phase 3 issue #41
-adds user-independent product read DTOs and selectors in
-`news.application.story_read`, plus signed keyset cursor primitives in
-`news.application.story_cursors`; HTTP/viewer decoration remains outside News.
+The route registry is the integration point for HTTP adapters; it must not
+accumulate domain rules. Phase 3 (#41) added user-independent product read
+DTOs and selectors in `news.application.story_read`, plus signed keyset cursor
+primitives in `news.application.story_cursors`; News serves the source list
+over HTTP (#47), while viewer decoration and feed/detail composition stay in
+Reading. The opt-in `news_demo_articles` command (#52) adds fictional
+publications for local demos; it writes News Core provenance only and never
+runs automatically.
+
+The Expo client in `mobile/` consumes these contracts and owns no durable
+product state: the server remains the authority for Stories, Bookmarks and
+accepted FeedImpressions (see the
+[mobile README](../../mobile/README.md#saved-and-bookmarks)).
 
 ## Dependency direction
 
@@ -84,9 +92,9 @@ interface rather than another module's internal models.
 | Module | Owns | Current state |
 | --- | --- | --- |
 | Accounts | Stable user identity and account authentication foundation | User model plus JWT login/logout/refresh/current-user endpoints ([ADR-0009](../adr/0009-jwt-mobile-authentication.md)); no registration or profile fields |
-| News | Source publications, Articles, Stories and source-grounded factual synthesis | News Core: RSS/JSON Feed ingestion, deterministic normalization and deterministic deduplication ([ADR-0010](../adr/0010-article-identity-and-deduplication.md)). Story Engine: versioned Article/Story embeddings, pgvector candidate retrieval, deterministic matcher v3, Article → Story associations, snapshot/compare-and-swap Story refresh, Topics and Entities, extractive source-grounded synthesis, Celery processing, reconciliation, reprocessing and operator commands ([Story Engine architecture](story-engine.md)). Story-side state is derived and rebuildable and never cascades into Article provenance. No Story feed or detail API |
+| News | Source publications, Articles, Stories and source-grounded factual synthesis | News Core: RSS/JSON Feed ingestion, deterministic normalization and deterministic deduplication ([ADR-0010](../adr/0010-article-identity-and-deduplication.md)). Story Engine: versioned Article/Story embeddings, pgvector candidate retrieval, deterministic matcher v3, Article → Story associations, snapshot/compare-and-swap Story refresh, Topics and Entities, extractive source-grounded synthesis, Celery processing, reconciliation, reprocessing and operator commands ([Story Engine architecture](story-engine.md)). Story-side state is derived and never cascades into Article provenance; since Phase 3, Story IDs are user-facing references, so a bookmarked Story is archived (never deleted) when it empties ([ADR-0011](../adr/0011-reading-ownership-and-story-references.md)). User-independent read DTOs, cursors and the source-list endpoint (#41/#47) |
 | Opinion | Human Opinions, declared positions, derived Perspectives and Pulse | Planned; no package or models |
-| Reading | Private Bookmark and FeedImpression lifecycle; feed composition and viewer decoration through News read interfaces | Contract accepted in ADR-0011; implementation begins in Phase 3 issues #42/#43. It never owns shared Story facts or recommendation |
+| Reading | Private Bookmark and FeedImpression lifecycle; feed composition and viewer decoration through News read interfaces | Implemented in Phase 3: Bookmarks and Saved pages (#42), FeedImpression intake and operator-run retention (#43), authenticated feed/detail composition (#47). It never owns shared Story facts or recommendation |
 | Recommendation | Discovery ranking, interests and ranking signals | Planned; no package or models; Phase 3 feed ordering is shared and non-personalized |
 | Moderation | Moderation decisions and eligibility policies, coordinated with content owners | Planned; policies and interfaces remain undecided |
 | Notifications | Notification delivery coordination and provider integration | Planned; no package or models |

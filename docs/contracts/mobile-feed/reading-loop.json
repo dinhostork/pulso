@@ -1,0 +1,598 @@
+{
+  "story": {
+    "id": "101",
+    "language": "en",
+    "created_at": "2026-09-20T12:00:00Z",
+    "first_published_at": "2026-03-02T12:00:00Z",
+    "last_published_at": "2026-03-04T12:00:00Z",
+    "content_state": "CURRENT",
+    "synthesis_id": "201",
+    "synthesized_at": "2026-09-20T12:00:00Z",
+    "title": "Storm forces closure of Elsby harbor",
+    "elements": [
+      {
+        "id": "301",
+        "kind": "TITLE",
+        "position": 0,
+        "text": "Storm forces closure of Elsby harbor",
+        "article_ids": [
+          "401"
+        ]
+      },
+      {
+        "id": "302",
+        "kind": "SUMMARY",
+        "position": 0,
+        "text": "The Elsby Harbor Authority closed the harbor on Monday after overnight gales damaged two piers.",
+        "article_ids": [
+          "401"
+        ]
+      },
+      {
+        "id": "303",
+        "kind": "SUMMARY",
+        "position": 1,
+        "text": "Elsby's harbor was closed to all shipping on Monday when storm winds broke sections of two piers, the harbor authority said.",
+        "article_ids": [
+          "402"
+        ]
+      },
+      {
+        "id": "304",
+        "kind": "SUMMARY",
+        "position": 2,
+        "text": "Dozens of trawlers sat idle in Elsby on Monday, their crews unable to sail after a night of violent wind tore through the town's waterfront.",
+        "article_ids": [
+          "403"
+        ]
+      },
+      {
+        "id": "305",
+        "kind": "CONTEXT",
+        "position": 0,
+        "text": "Harbor master Oren Vasko said no vessels may enter or leave until engineers inspect the damage.",
+        "article_ids": [
+          "401"
+        ]
+      },
+      {
+        "id": "306",
+        "kind": "CONTEXT",
+        "position": 1,
+        "text": "Inspections are expected to take several days.",
+        "article_ids": [
+          "402"
+        ]
+      },
+      {
+        "id": "307",
+        "kind": "CONTEXT",
+        "position": 2,
+        "text": "Port officials have barred all traffic while repairs are assessed.",
+        "article_ids": [
+          "403"
+        ]
+      },
+      {
+        "id": "308",
+        "kind": "CONTEXT",
+        "position": 3,
+        "text": "Two days after storm damage closed the harbor, the Elsby Harbor Authority said the eastern berths will reopen next week.",
+        "article_ids": [
+          "404"
+        ]
+      }
+    ],
+    "topics": [
+      {
+        "slug": "closed",
+        "label": "closed"
+      },
+      {
+        "slug": "damage",
+        "label": "damage"
+      },
+      {
+        "slug": "piers",
+        "label": "piers"
+      },
+      {
+        "slug": "storm",
+        "label": "storm"
+      },
+      {
+        "slug": "damaged",
+        "label": "damaged"
+      },
+      {
+        "slug": "days",
+        "label": "days"
+      },
+      {
+        "slug": "gales",
+        "label": "gales"
+      },
+      {
+        "slug": "repairs",
+        "label": "repairs"
+      }
+    ],
+    "article_count": 4,
+    "source_count": 3,
+    "entities": [
+      {
+        "kind": "OTHER",
+        "display_name": "Elsby"
+      },
+      {
+        "kind": "ORGANIZATION",
+        "display_name": "Elsby Harbor Authority"
+      },
+      {
+        "kind": "PERSON",
+        "display_name": "Oren Vasko"
+      }
+    ],
+    "current_article_count": 4,
+    "current_source_count": 3,
+    "citations": {
+      "401": {
+        "id": "401",
+        "title": "Storm forces closure of Elsby harbor",
+        "canonical_url": "https://elsby-courier.example/stories/harbor-storm-01",
+        "source": {
+          "id": "501",
+          "name": "Elsby Courier",
+          "slug": "elsby-courier"
+        },
+        "published_at": "2026-03-02T12:00:00Z",
+        "first_seen_at": "2026-03-02T12:00:00Z",
+        "byline": null,
+        "duplicate_of_id": null,
+        "is_current_member": true
+      },
+      "402": {
+        "id": "402",
+        "title": "Elsby harbor shut after gales damage piers",
+        "canonical_url": "https://kestrel-post.example/stories/harbor-storm-02",
+        "source": {
+          "id": "502",
+          "name": "Kestrel Post",
+          "slug": "kestrel-post"
+        },
+        "published_at": "2026-03-02T12:40:00Z",
+        "first_seen_at": "2026-03-02T12:40:00Z",
+        "byline": null,
+        "duplicate_of_id": null,
+        "is_current_member": true
+      },
+      "403": {
+        "id": "403",
+        "title": "Fishing fleet stranded as gale wrecks waterfront",
+        "canonical_url": "https://meridian-daily.example/stories/harbor-storm-03",
+        "source": {
+          "id": "503",
+          "name": "Meridian Daily",
+          "slug": "meridian-daily"
+        },
+        "published_at": "2026-03-02T13:35:00Z",
+        "first_seen_at": "2026-03-02T13:35:00Z",
+        "byline": null,
+        "duplicate_of_id": null,
+        "is_current_member": true
+      },
+      "404": {
+        "id": "404",
+        "title": "Elsby harbor to reopen partially next week",
+        "canonical_url": "https://elsby-courier.example/stories/harbor-storm-04",
+        "source": {
+          "id": "501",
+          "name": "Elsby Courier",
+          "slug": "elsby-courier"
+        },
+        "published_at": "2026-03-04T12:00:00Z",
+        "first_seen_at": "2026-03-04T12:00:00Z",
+        "byline": null,
+        "duplicate_of_id": null,
+        "is_current_member": true
+      }
+    },
+    "sources_path": "/api/stories/101/sources?synthesis_id=201",
+    "viewer": {
+      "bookmarked": false
+    }
+  },
+  "feed_card": {
+    "id": "101",
+    "language": "en",
+    "created_at": "2026-09-20T12:00:00Z",
+    "first_published_at": "2026-03-02T12:00:00Z",
+    "last_published_at": "2026-03-04T12:00:00Z",
+    "content_state": "CURRENT",
+    "synthesis_id": "201",
+    "synthesized_at": "2026-09-20T12:00:00Z",
+    "title": "Storm forces closure of Elsby harbor",
+    "elements": [
+      {
+        "id": "301",
+        "kind": "TITLE",
+        "position": 0,
+        "text": "Storm forces closure of Elsby harbor",
+        "article_ids": [
+          "401"
+        ]
+      },
+      {
+        "id": "302",
+        "kind": "SUMMARY",
+        "position": 0,
+        "text": "The Elsby Harbor Authority closed the harbor on Monday after overnight gales damaged two piers.",
+        "article_ids": [
+          "401"
+        ]
+      },
+      {
+        "id": "303",
+        "kind": "SUMMARY",
+        "position": 1,
+        "text": "Elsby's harbor was closed to all shipping on Monday when storm winds broke sections of two piers, the harbor authority said.",
+        "article_ids": [
+          "402"
+        ]
+      },
+      {
+        "id": "304",
+        "kind": "SUMMARY",
+        "position": 2,
+        "text": "Dozens of trawlers sat idle in Elsby on Monday, their crews unable to sail after a night of violent wind tore through the town's waterfront.",
+        "article_ids": [
+          "403"
+        ]
+      },
+      {
+        "id": "305",
+        "kind": "CONTEXT",
+        "position": 0,
+        "text": "Harbor master Oren Vasko said no vessels may enter or leave until engineers inspect the damage.",
+        "article_ids": [
+          "401"
+        ]
+      },
+      {
+        "id": "306",
+        "kind": "CONTEXT",
+        "position": 1,
+        "text": "Inspections are expected to take several days.",
+        "article_ids": [
+          "402"
+        ]
+      },
+      {
+        "id": "307",
+        "kind": "CONTEXT",
+        "position": 2,
+        "text": "Port officials have barred all traffic while repairs are assessed.",
+        "article_ids": [
+          "403"
+        ]
+      },
+      {
+        "id": "308",
+        "kind": "CONTEXT",
+        "position": 3,
+        "text": "Two days after storm damage closed the harbor, the Elsby Harbor Authority said the eastern berths will reopen next week.",
+        "article_ids": [
+          "404"
+        ]
+      }
+    ],
+    "topics": [
+      {
+        "slug": "closed",
+        "label": "closed"
+      },
+      {
+        "slug": "damage",
+        "label": "damage"
+      },
+      {
+        "slug": "piers",
+        "label": "piers"
+      },
+      {
+        "slug": "storm",
+        "label": "storm"
+      },
+      {
+        "slug": "damaged",
+        "label": "damaged"
+      },
+      {
+        "slug": "days",
+        "label": "days"
+      },
+      {
+        "slug": "gales",
+        "label": "gales"
+      },
+      {
+        "slug": "repairs",
+        "label": "repairs"
+      }
+    ],
+    "article_count": 4,
+    "source_count": 3,
+    "viewer": {
+      "bookmarked": false
+    }
+  },
+  "sources": {
+    "results": [
+      {
+        "id": "401",
+        "title": "Storm forces closure of Elsby harbor",
+        "canonical_url": "https://elsby-courier.example/stories/harbor-storm-01",
+        "source": {
+          "id": "501",
+          "name": "Elsby Courier",
+          "slug": "elsby-courier"
+        },
+        "published_at": "2026-03-02T12:00:00Z",
+        "first_seen_at": "2026-03-02T12:00:00Z",
+        "byline": null,
+        "duplicate_of_id": null,
+        "is_current_member": true
+      },
+      {
+        "id": "402",
+        "title": "Elsby harbor shut after gales damage piers",
+        "canonical_url": "https://kestrel-post.example/stories/harbor-storm-02",
+        "source": {
+          "id": "502",
+          "name": "Kestrel Post",
+          "slug": "kestrel-post"
+        },
+        "published_at": "2026-03-02T12:40:00Z",
+        "first_seen_at": "2026-03-02T12:40:00Z",
+        "byline": null,
+        "duplicate_of_id": null,
+        "is_current_member": true
+      },
+      {
+        "id": "403",
+        "title": "Fishing fleet stranded as gale wrecks waterfront",
+        "canonical_url": "https://meridian-daily.example/stories/harbor-storm-03",
+        "source": {
+          "id": "503",
+          "name": "Meridian Daily",
+          "slug": "meridian-daily"
+        },
+        "published_at": "2026-03-02T13:35:00Z",
+        "first_seen_at": "2026-03-02T13:35:00Z",
+        "byline": null,
+        "duplicate_of_id": null,
+        "is_current_member": true
+      },
+      {
+        "id": "404",
+        "title": "Elsby harbor to reopen partially next week",
+        "canonical_url": "https://elsby-courier.example/stories/harbor-storm-04",
+        "source": {
+          "id": "501",
+          "name": "Elsby Courier",
+          "slug": "elsby-courier"
+        },
+        "published_at": "2026-03-04T12:00:00Z",
+        "first_seen_at": "2026-03-04T12:00:00Z",
+        "byline": null,
+        "duplicate_of_id": null,
+        "is_current_member": true
+      }
+    ],
+    "next_cursor": null
+  },
+  "updating_story": {
+    "id": "101",
+    "language": "en",
+    "created_at": "2026-09-20T12:00:00Z",
+    "first_published_at": "2026-03-02T12:00:00Z",
+    "last_published_at": "2026-03-04T12:00:00Z",
+    "content_state": "UPDATING",
+    "synthesis_id": "201",
+    "synthesized_at": "2026-09-20T12:00:00Z",
+    "title": "Storm forces closure of Elsby harbor",
+    "elements": [
+      {
+        "id": "301",
+        "kind": "TITLE",
+        "position": 0,
+        "text": "Storm forces closure of Elsby harbor",
+        "article_ids": [
+          "401"
+        ]
+      },
+      {
+        "id": "302",
+        "kind": "SUMMARY",
+        "position": 0,
+        "text": "The Elsby Harbor Authority closed the harbor on Monday after overnight gales damaged two piers.",
+        "article_ids": [
+          "401"
+        ]
+      },
+      {
+        "id": "303",
+        "kind": "SUMMARY",
+        "position": 1,
+        "text": "Elsby's harbor was closed to all shipping on Monday when storm winds broke sections of two piers, the harbor authority said.",
+        "article_ids": [
+          "402"
+        ]
+      },
+      {
+        "id": "304",
+        "kind": "SUMMARY",
+        "position": 2,
+        "text": "Dozens of trawlers sat idle in Elsby on Monday, their crews unable to sail after a night of violent wind tore through the town's waterfront.",
+        "article_ids": [
+          "403"
+        ]
+      },
+      {
+        "id": "305",
+        "kind": "CONTEXT",
+        "position": 0,
+        "text": "Harbor master Oren Vasko said no vessels may enter or leave until engineers inspect the damage.",
+        "article_ids": [
+          "401"
+        ]
+      },
+      {
+        "id": "306",
+        "kind": "CONTEXT",
+        "position": 1,
+        "text": "Inspections are expected to take several days.",
+        "article_ids": [
+          "402"
+        ]
+      },
+      {
+        "id": "307",
+        "kind": "CONTEXT",
+        "position": 2,
+        "text": "Port officials have barred all traffic while repairs are assessed.",
+        "article_ids": [
+          "403"
+        ]
+      },
+      {
+        "id": "308",
+        "kind": "CONTEXT",
+        "position": 3,
+        "text": "Two days after storm damage closed the harbor, the Elsby Harbor Authority said the eastern berths will reopen next week.",
+        "article_ids": [
+          "404"
+        ]
+      }
+    ],
+    "topics": [
+      {
+        "slug": "closed",
+        "label": "closed"
+      },
+      {
+        "slug": "damage",
+        "label": "damage"
+      },
+      {
+        "slug": "piers",
+        "label": "piers"
+      },
+      {
+        "slug": "storm",
+        "label": "storm"
+      },
+      {
+        "slug": "damaged",
+        "label": "damaged"
+      },
+      {
+        "slug": "days",
+        "label": "days"
+      },
+      {
+        "slug": "gales",
+        "label": "gales"
+      },
+      {
+        "slug": "repairs",
+        "label": "repairs"
+      }
+    ],
+    "article_count": 4,
+    "source_count": 3,
+    "entities": [
+      {
+        "kind": "OTHER",
+        "display_name": "Elsby"
+      },
+      {
+        "kind": "ORGANIZATION",
+        "display_name": "Elsby Harbor Authority"
+      },
+      {
+        "kind": "PERSON",
+        "display_name": "Oren Vasko"
+      }
+    ],
+    "current_article_count": 3,
+    "current_source_count": 3,
+    "citations": {
+      "401": {
+        "id": "401",
+        "title": "Storm forces closure of Elsby harbor",
+        "canonical_url": "https://elsby-courier.example/stories/harbor-storm-01",
+        "source": {
+          "id": "501",
+          "name": "Elsby Courier",
+          "slug": "elsby-courier"
+        },
+        "published_at": "2026-03-02T12:00:00Z",
+        "first_seen_at": "2026-03-02T12:00:00Z",
+        "byline": null,
+        "duplicate_of_id": null,
+        "is_current_member": false
+      },
+      "402": {
+        "id": "402",
+        "title": "Elsby harbor shut after gales damage piers",
+        "canonical_url": "https://kestrel-post.example/stories/harbor-storm-02",
+        "source": {
+          "id": "502",
+          "name": "Kestrel Post",
+          "slug": "kestrel-post"
+        },
+        "published_at": "2026-03-02T12:40:00Z",
+        "first_seen_at": "2026-03-02T12:40:00Z",
+        "byline": null,
+        "duplicate_of_id": null,
+        "is_current_member": true
+      },
+      "403": {
+        "id": "403",
+        "title": "Fishing fleet stranded as gale wrecks waterfront",
+        "canonical_url": "https://meridian-daily.example/stories/harbor-storm-03",
+        "source": {
+          "id": "503",
+          "name": "Meridian Daily",
+          "slug": "meridian-daily"
+        },
+        "published_at": "2026-03-02T13:35:00Z",
+        "first_seen_at": "2026-03-02T13:35:00Z",
+        "byline": null,
+        "duplicate_of_id": null,
+        "is_current_member": true
+      },
+      "404": {
+        "id": "404",
+        "title": "Elsby harbor to reopen partially next week",
+        "canonical_url": "https://elsby-courier.example/stories/harbor-storm-04",
+        "source": {
+          "id": "501",
+          "name": "Elsby Courier",
+          "slug": "elsby-courier"
+        },
+        "published_at": "2026-03-04T12:00:00Z",
+        "first_seen_at": "2026-03-04T12:00:00Z",
+        "byline": null,
+        "duplicate_of_id": null,
+        "is_current_member": true
+      }
+    },
+    "sources_path": "/api/stories/101/sources?synthesis_id=201",
+    "viewer": {
+      "bookmarked": false
+    }
+  },
+  "moved_article_id": "401"
+}

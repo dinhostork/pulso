@@ -4,14 +4,18 @@
 > at [`docs/development.md`](../docs/development.md) instead; come back here
 > for mobile-specific depth.
 
-An Expo/TypeScript application shell for Pulso's React Native mobile app. The
-reproducible bootstrap now includes the Phase 3 transport, DTO-decoding and
-server-state boundary, sign-in and account-isolated sessions, the Feed/Saved
-navigation with shared accessible UI primitives, and the paginated Story Feed
-read from the real `GET /api/feed` endpoint. There is no fake runtime dataset. See the [root README](../README.md) for the product this
-shell will eventually host, and
-[docs/architecture/module-boundaries.md](../docs/architecture/module-boundaries.md)
-for backend module ownership.
+Pulso's Expo/TypeScript React Native app. Phase 3 (Mobile Feed) is
+implemented: the transport, DTO-decoding and server-state boundary, sign-in
+with account-isolated sessions, the paginated Story Feed, Story details with
+citations and source lists, the OS-browser publisher hand-off, bookmarks and
+the Saved tab, and qualified FeedImpression reporting, all over the real
+backend API. There is no fake runtime dataset. See the
+[root README](../README.md) for the product, the
+[Mobile Feed architecture](../docs/architecture/mobile-feed.md) for the
+contract, [module boundaries](../docs/architecture/module-boundaries.md) for
+ownership, and the
+[Phase 3 acceptance record](../docs/acceptance/phase-3-mobile-feed.md) for
+native evidence and known limitations.
 
 ## Runtime and dependencies
 
@@ -92,12 +96,25 @@ at a different backend:
 cp mobile/.env.example mobile/.env
 ```
 
-| Running on                               | `EXPO_PUBLIC_API_BASE_URL`        | Why                                                                                                                                                                                                                                                                                                          |
-| ---------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Web (`expo start --web`)                 | `http://localhost:8000` (default) | Browser and backend share the host's network namespace                                                                                                                                                                                                                                                       |
-| Android **emulator**                     | `http://10.0.2.2:8000`            | The emulator's own loopback alias for the host machine; `localhost` inside the emulator means the emulator itself, not your machine                                                                                                                                                                          |
-| iOS **simulator**                        | `http://localhost:8000`           | The simulator shares the host's network namespace, unlike the Android emulator                                                                                                                                                                                                                               |
-| Physical device (either OS), via Expo Go | `http://<host-LAN-IP>:8000`       | The device is a separate machine on the network; it cannot resolve `localhost` as your development machine. The backend's Compose setup only publishes to `127.0.0.1` (backend/README.md) — reconfigure that publish to your LAN interface, or use `expo start --tunnel`, to reach it from a physical device |
+Expo Go loads the **JavaScript bundle** from Metro (LAN, or `npx expo start
+--tunnel`); the app then calls the **API** at `EXPO_PUBLIC_API_BASE_URL` on its
+own. These are separate connections: a Metro tunnel does not make the backend
+reachable. The Compose backend publishes only on `127.0.0.1:8000`, and Django
+accepts only the hosts listed in `ALLOWED_HOSTS` (`localhost,127.0.0.1,[::1]` in
+`backend/.env.example`).
+
+| Running on                   | `EXPO_PUBLIC_API_BASE_URL`  | What reaches the backend                                                                                                                                                                            |
+| ---------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Web (`expo start --web`)     | `http://localhost:8000`     | Same host. Rendering works; calling the API from the browser does not, because the backend has no CORS configuration (see below)                                                                    |
+| Android **emulator**         | `http://10.0.2.2:8000`      | The emulator's alias for the host loopback. Add `10.0.2.2` to `ALLOWED_HOSTS` in `backend/.env`, or use `adb reverse` as for a device and keep `http://127.0.0.1:8000`                              |
+| Physical Android (USB)       | `http://127.0.0.1:8000`     | `adb reverse tcp:8000 tcp:8000` forwards the device's port 8000 to the host's loopback, so no LAN exposure or `ALLOWED_HOSTS` change is needed. This is the path used for the recorded native smoke |
+| iOS **simulator**            | `http://localhost:8000`     | The simulator shares the host's network namespace (not validated in Phase 3)                                                                                                                        |
+| Physical device over the LAN | `http://<host-LAN-IP>:8000` | Deliberate exposure only: publish the backend on that interface with a local, uncommitted Compose override and add exactly that IP to `ALLOWED_HOSTS`. Never use `*` or `0.0.0.0` defaults          |
+
+Browser API access is not configured: there is no CORS middleware, and Phase 3
+adds none. The web build compiles and renders (checked in CI), keeps
+credentials in memory only, and shows its "unavailable" states against a
+cross-origin API; native Android/iOS is the acceptance target.
 
 If unset, `src/config/env.ts` falls back to `http://localhost:8000` (the web/
 default case) so the shell still renders with no `.env` file at all.
@@ -203,8 +220,8 @@ strings; #49 decides “Published” vs “First seen”).
 - **Sign-in keyboard**: the form scrolls above the keyboard, “next” on the
   username moves to the password, and “go” on the password submits.
 
-Manual screen-reader and large-text checks on native targets are recorded in
-#52.
+Native screen-reader, large-text and small-screen results are recorded in the
+[Phase 3 acceptance record](../docs/acceptance/phase-3-mobile-feed.md).
 
 ## Story Feed
 
@@ -476,6 +493,12 @@ device and iOS simulator, with the backend running and a ready Story:
    return: both pages are still listed.
 4. With no browser able to handle the link (e.g. an emulator without one), the
    row shows "The publication could not be opened on this device."
+
+Step 2 holds while Pulso's process stays alive. If the operating system kills
+Pulso while the browser is in front, the next launch is a cold start: the
+session is restored from secure storage but navigation restarts at the Feed
+(an accepted v0.4 limitation). Recorded results are in the
+[Phase 3 acceptance record](../docs/acceptance/phase-3-mobile-feed.md).
 
 ## Saved and bookmarks
 
@@ -756,16 +779,35 @@ render(...)`) as of v14; a call site that forgets `await` fails with a
   coverage" scope item.
 
 `npm test` runs Jest in local/watch mode (interactive); `npm run test:ci`
-(`jest --ci --watchAll=false --passWithNoTests`) is the non-interactive
-form for scripts and CI — it terminates on its own regardless of terminal
-type, per this issue's "CI test mode terminates without watch mode or
-interactive input" acceptance criterion.
+(`jest --ci --watchAll=false`) is the non-interactive form for scripts and
+CI — it terminates on its own regardless of terminal type and fails when no
+test is collected (there is no `--passWithNoTests`). `npx jest --listTests`
+lists every collected suite.
+
+Bookmark tests (`src/features/bookmarks/__tests__/`) cover save/remove from
+each surface reflected everywhere, rapid taps, the busy state, server
+rejection, lost responses reconciled by re-reading, unconfirmed writes and
+their explicit repeat, Saved pagination/refresh/footer/empty states,
+PREPARING/UPDATING rows, tombstone removal, restart, two accounts and a write
+that returns after an account switch. `src/test-utils/readingServer.ts` is
+their stateful scripted API.
+
+The integration suite (`src/integration/__tests__/readingLoop.test.tsx`, #52)
+runs the whole loop through the mocked HTTP boundary — sign in, Feed, detail,
+a citation's publisher hand-off, sources, save, Saved, token expiry and
+refresh during removal, a prior-generation citation, exposure delivery failure
+and retry, logout and account switch — using
+[`reading-loop.json`](../docs/contracts/mobile-feed/README.md), which the
+backend produces from the recorded Story corpus.
+
+CI also runs `npx expo export --platform web` and fails if the exported route
+set differs from the Phase 3 routes (see the mobile job in
+`.github/workflows/ci.yml`).
 
 ### Proving failures are caught
 
 Not part of the committed suite — this is what was actually run once to
-confirm the tooling fails loudly, the same way `not_shared/validation/`
-records for the backend:
+confirm the tooling fails loudly:
 
 ```bash
 # A deliberate type error:

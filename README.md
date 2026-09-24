@@ -463,6 +463,8 @@ Major architectural and domain decisions are documented as ADRs.
 | [ADR-0008](docs/adr/0008-recommend-stories-not-truth.md) | Recommendation Personalizes Discovery, Not Truth |
 | [ADR-0009](docs/adr/0009-jwt-mobile-authentication.md) | JWT Bearer Authentication for the Mobile API |
 | [ADR-0010](docs/adr/0010-article-identity-and-deduplication.md) | Article Identity and Deduplication |
+| [ADR-0011](docs/adr/0011-reading-ownership-and-story-references.md) | Reading Owns Durable User References to Stories |
+| [ADR-0012](docs/adr/0012-qualified-feed-impressions.md) | FeedImpression Is a Qualified Client-Reported Exposure |
 
 ADRs describe **why** these decisions were made, which alternatives were considered and the conditions under which they may be revisited.
 
@@ -480,7 +482,7 @@ and reusing the same commands documented in
 | --- | --- |
 | `backend` | Ruff lint/format, Django system checks (dev and isolated test settings), migration-drift check, and the full pytest suite against a real disposable PostgreSQL/pgvector and Redis |
 | `worker-smoke` | Compose configuration validation, then the real-broker Celery smoke check (`pytest -m celery_smoke`) against a separately running worker process, not eager/local execution |
-| `mobile` | `expo-doctor`, ESLint, Prettier, TypeScript and the Jest suite, from the committed lockfile |
+| `mobile` | `expo-doctor`, ESLint, Prettier, TypeScript, the Jest suite and a web export route check, from the committed lockfile |
 
 These are the exact names to reference from **Settings → Branches → Branch
 protection rules → Require status checks to pass** when enabling required
@@ -546,12 +548,15 @@ Publish
 
 ## Project status
 
-> **Current stage: Story Engine implemented; Mobile Feed next.**
+> **Current stage: Mobile Feed implemented; Opinion Core next.**
 
-The Foundation, News Core and Story Engine are implemented and tested. Story
-grouping quality is measured on a repository-owned synthetic corpus, not on
-production data. Mobile Feed is the next milestone; product and UX work
-continues to evolve.
+The Foundation, News Core, Story Engine and Mobile Feed are implemented and
+tested. Story grouping quality is measured on a repository-owned synthetic
+corpus, not on production data. Mobile Feed was accepted on a physical Android
+device; iOS was not validated and is recorded as a platform exception in the
+[Phase 3 acceptance record](docs/acceptance/phase-3-mobile-feed.md), together
+with its known limitations. Opinion Core is the next milestone; product and UX
+work continues to evolve.
 
 The wireframes represent the current product hypothesis and are not final visual design.
 
@@ -592,7 +597,10 @@ Implemented; see the [Story Engine architecture](docs/architecture/story-engine.
 - Topics and Entities;
 - source-grounded summaries.
 
-### Phase 3 — Mobile Feed
+### Phase 3 — Mobile Feed (v0.4.0)
+
+Implemented; see the [Mobile Feed architecture](docs/architecture/mobile-feed.md)
+and the [acceptance record](docs/acceptance/phase-3-mobile-feed.md).
 
 - Story feed;
 - Story details;
@@ -690,6 +698,9 @@ One user = one active position per Story
 
 Recommendation != factual personalization
 ```
+
+Their status after Phase 3 is reviewed against the code in the
+[acceptance record](docs/acceptance/phase-3-mobile-feed.md#invariant-review).
 
 These constraints are intentional parts of the product and domain model, not implementation accidents.
 
