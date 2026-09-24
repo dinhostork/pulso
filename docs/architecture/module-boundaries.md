@@ -17,10 +17,11 @@ independent deployable services. This maps
 | `backend/diagnostics/` | Temporary Celery/Redis infrastructure diagnostic (issue #4); no product models or domain rules |
 | `backend/news/` | News-owned publication persistence (Source, SourceEndpoint, IngestionRun, RawArticle, Article) and the Story Engine (Story, StoryArticle, ArticleEmbedding, StoryEmbedding, ArticleStoryProcessing, Topic, Entity, StoryTopic, StoryEntity and the StorySynthesis tables); `adapters/` fetch and parse feeds and implement the embedding, extraction and synthesis ports, `application/` runs ingestion, processing, Story matching, refresh and operations, `domain/` holds pure rules, `tasks.py` orchestrates Celery work, `logging.py` supplies context, and management commands provide the operator surface. See the [News Core architecture](news-core.md) and the [Story Engine architecture](story-engine.md). |
 
-The accepted Phase 3 boundary adds a logical `reading` module for private
-Bookmarks and FeedImpressions. It is documented now, but its package and models
-are not implemented by issue #40. See the [Mobile Feed architecture](mobile-feed.md)
-and [ADR-0011](../adr/0011-reading-ownership-and-story-references.md).
+The Phase 3 `reading` module (`backend/reading/`) owns private Bookmarks (#42)
+and FeedImpressions (#43): models, application services, thin DRF adapters and
+the `reading_prune_impressions` retention command. See the
+[Mobile Feed architecture](mobile-feed.md) and
+[ADR-0011](../adr/0011-reading-ownership-and-story-references.md).
 
 Accounts uses Django's `AbstractUser` and a database-generated `BigAutoField`
 primary key. Future relationships use `settings.AUTH_USER_MODEL` in model fields

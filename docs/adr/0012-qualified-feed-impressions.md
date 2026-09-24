@@ -68,3 +68,13 @@ safe. These limitations must remain visible in any future analysis.
   an architectural invariant and remains subject to #43 validation.
 - Future Recommendation may consume records only through an explicit Reading
   interface and may not reinterpret them as positions or verified attention.
+
+## Validation record
+
+Issue #43 validated the server-side proposals and kept them: 32 KiB bodies,
+1–20 events per batch, positions 0–100000, occurrence at most 24 hours old or
+5 minutes ahead, an advisory 60 batches/minute per account, and 30-day
+retention by receipt time applied by an operator command. The evidence and
+trade-offs are recorded in the
+[Mobile Feed architecture](../architecture/mobile-feed.md#feedimpression-server-policy-43).
+Client qualification and queue values remain owned by #51.

@@ -12,4 +12,9 @@ urlpatterns = [
         views.BookmarkMutationView.as_view(),
         name="bookmark-mutation",
     ),
+    path(
+        "feed-impressions",
+        views.FeedImpressionBatchView.as_view(),
+        name="feed-impressions",
+    ),
 ]

@@ -45,6 +45,10 @@ REST_FRAMEWORK = {
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
+    # Scoped rates only; no global throttle class is enabled. The counters live
+    # in Django's default per-process cache, so they are an advisory operational
+    # bound, not a distributed fraud or DoS guarantee (#43).
+    "DEFAULT_THROTTLE_RATES": {"feed_impressions": "60/min"},
 }
 # See ADR-0009 for the lifetime/rotation rationale, including the documented
 # residual-validity window: logout blacklists the refresh token immediately,
@@ -236,6 +240,10 @@ NEWS_STALE_RUNNING_SECONDS = 180
 # Default retention for finalized IngestionRun history, used by both
 # `news_prune_runs` and the optional weekly prune task (#20).
 NEWS_RUN_RETENTION_DAYS = 30
+
+# FeedImpression retention (#43), measured from server `received_at` and
+# applied only when an operator runs `reading_prune_impressions --apply`.
+READING_IMPRESSION_RETENTION_DAYS = 30
 
 # Structured operational logging (issue #20). Only the `pulso` tree is
 # configured: Django's and Celery's own loggers keep their default behavior,

@@ -108,6 +108,14 @@ SAFE_FIELDS = (
     "synthesis_source_count",
     "refresh_state",
     "refresh_reason",
+    # Reading FeedImpression batches and retention (#43): counts only, never
+    # event, session or Story identifiers.
+    "accepted_count",
+    "duplicate_count",
+    "conflict_count",
+    "rejected_count",
+    "eligible_count",
+    "batch_count",
     # Retention.
     "deleted",
     "retention_days",

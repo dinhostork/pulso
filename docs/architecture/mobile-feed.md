@@ -174,7 +174,7 @@ trailing slash.
 | `GET /api/bookmarks`                  | `cursor?`, `limit?`                      | 200 saved page including tombstones | Reading / implemented #42               |
 | `PUT /api/bookmarks/{story_id}`       | empty body                               | 200 bookmark result                 | Reading / implemented #42               |
 | `DELETE /api/bookmarks/{story_id}`    | no body                                  | 204, present or absent              | Reading / implemented #42               |
-| `POST /api/feed-impressions`          | `{events:[...]}`                         | 200 per-event outcomes              | Reading / planned #43/#51               |
+| `POST /api/feed-impressions`          | `{events:[...]}`                         | 200 per-event outcomes              | Reading / implemented #43; client #51   |
 
 Product errors are `{code,detail}` with an optional bounded `fields` object:
 400 invalid input/cursor, 401 unauthorized, 404 missing, 409 changed cursor
@@ -285,6 +285,82 @@ As decided by ADR-0011, impression rows preserve `original_story_id` and use a
 nullable `SET_NULL` Story relation if a rare hard deletion occurs. This avoids
 letting short-retention telemetry block Story cleanup while retaining the
 event's originally reported identity. Bookmarks independently use `PROTECT`.
+
+### FeedImpression server policy (#43)
+
+Issue #43 implements acceptance in `reading/application/impressions.py` and
+retention in the `reading_prune_impressions` command. It evaluated each initial
+server-side proposal against bounded PostgreSQL work, data minimization,
+delayed client delivery and the #51 queue, and retained all of them:
+
+| Bound | v1 value | Why it holds |
+| --- | --- | --- |
+| Request body | 32 KiB, checked from `Content-Length` and the read body before decoding | A maximal valid 20-event batch (19-digit Story ID, microsecond offset timestamps) measures 5.0 KiB compact and 7.3 KiB indented; 32 KiB leaves ~4x headroom for encoders while bounding parse memory |
+| Batch | 1–20 events | Equals the #51 flush threshold; the 100-event queue drains in five batches. Worst case per request is two lookups plus 20 savepoint inserts |
+| Position | 0–100000 | 2,000 pages of 50 cards, far beyond a realistic session; also enforced by a database check |
+| `occurred_at` | at most 24 h old, at most 5 min ahead | The #51 queue TTL is 10 min, so honest events arrive well inside 24 h even after retries and `Retry-After` waits. 5 min tolerates ordinary device clock skew; a device clock that is further off loses its events (400, terminal) rather than storing impossible times |
+| Throttle | 60 batch requests/min per account | A foreground client flushes at most every 5 s (12/min) plus leave/background flushes and bounded retries; 60 leaves room for several devices and bounds one account to 1,200 inserts/min. Counters use Django's default per-process cache, so the bound is advisory, not distributed fraud or DoS protection |
+| Retention | 30 days by `received_at` | Long enough for a future Recommendation evaluation window, short enough that the table stays small and no long-lived reading history accumulates |
+
+Structural validation is all or nothing and precedes every write: the body must
+be `application/json` UTF-8 without `NaN`/`Infinity`; the object has only
+`events`; each event has exactly the seven fields; UUIDs are hyphenated
+strings; `story_id` is a positive decimal string within `bigint`; `position`
+and `policy_version` are JSON integers (booleans and strings are rejected);
+`surface` is `HOME_FEED`; `occurred_at` carries a zone. Any failure returns 400
+`validation_error` with bounded per-field messages (`events[i].field`); an
+oversized body returns 413 `request_too_large`. `user_id`, `received_at` and
+any other field are rejected, never ignored.
+
+Accepted batches return 200 and one result per event, in input order:
+
+```http
+POST /api/feed-impressions
+Content-Type: application/json
+
+{"events":[
+  {"event_id":"4f4bb18e-b0e0-4e7f-8cf8-849b7013fa63","story_id":"45","feed_session_id":"dd42a0ee-0727-4796-bd11-dba56f1c498b","position":0,"surface":"HOME_FEED","policy_version":1,"occurred_at":"2026-09-19T10:06:01Z"},
+  {"event_id":"4f4bb18e-b0e0-4e7f-8cf8-849b7013fa63","story_id":"45","feed_session_id":"dd42a0ee-0727-4796-bd11-dba56f1c498b","position":0,"surface":"HOME_FEED","policy_version":1,"occurred_at":"2026-09-19T10:06:01Z"},
+  {"event_id":"0b0f7c1e-3c55-4a8e-9d1f-6f1c4e0a9b21","story_id":"999","feed_session_id":"dd42a0ee-0727-4796-bd11-dba56f1c498b","position":1,"surface":"HOME_FEED","policy_version":1,"occurred_at":"2026-09-19T10:06:02Z"}
+]}
+
+200
+{"results":[
+  {"event_id":"4f4bb18e-b0e0-4e7f-8cf8-849b7013fa63","outcome":"accepted","code":null},
+  {"event_id":"4f4bb18e-b0e0-4e7f-8cf8-849b7013fa63","outcome":"duplicate","code":null},
+  {"event_id":"0b0f7c1e-3c55-4a8e-9d1f-6f1c4e0a9b21","outcome":"rejected","code":"story_not_found"}
+]}
+```
+
+- `accepted`: a new row. `duplicate`: the same event ID with identical fields
+  already exists (replay, lost response, in-batch repeat); nothing changes.
+- `rejected` / `event_conflict`: the event ID exists with different fields, or
+  another event already holds the `(account, feed session, Story)` exposure.
+  The first persisted report wins; its position and times are never rewritten.
+- `rejected` / `story_not_found`: no Story with that ID exists. A known ARCHIVED,
+  stale or preparing Story is accepted because exposure can precede delivery;
+  acceptance never writes News rows.
+
+PostgreSQL is the deduplication authority: unique `(user, event_id)` and
+`(user, feed_session_id, original_story_id)` keys, resolved inside per-event
+savepoints so one conflict does not abort the batch. The exposure key uses the
+non-null `original_story_id`, not the nullable relation, so a Story hard
+deletion cannot make two reports of one exposure distinct. A check constraint
+keeps `story` either null or equal to `original_story_id`; the original ID is
+never used as a lookup, redirect or retarget. A generic 5xx (including the rare
+race in which a Story is deleted mid-request) permits whole-batch retry.
+
+Limits of client telemetry: reports are forgeable by an authenticated client,
+authentication does not prove the card was served or seen, process death loses
+queued events, and exactly-once end-to-end delivery is not promised. Logs carry
+operation, outcome, duration and per-outcome counts only—never event, session
+or Story identifiers, positions or payloads. Access logs of the web server are
+outside this policy and are not application-level anonymization.
+
+Retention is not automatic. Operators run `reading_prune_impressions`
+(dry run by default) on a regular schedule of their choosing; see the
+[backend runbook](../../backend/README.md#feed-impressions). Deleting an account
+cascades its impressions.
 
 ## Mobile boundary and retry ownership
 

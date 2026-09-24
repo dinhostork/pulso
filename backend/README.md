@@ -1703,3 +1703,50 @@ access token used as a refresh token), logout (missing field, already-used
 refresh token, blocking further refresh), the documented residual-validity
 window on an already-issued access token after logout, and that neither
 login nor logout requires a CSRF token (`Client(enforce_csrf_checks=True)`).
+
+## Feed impressions
+
+`POST /api/feed-impressions` accepts a client-reported qualified exposure of a
+Story card on HOME_FEED ([ADR-0012](../docs/adr/0012-qualified-feed-impressions.md)).
+It is not a view count, click, vote or proof of attention. The request/result
+contract, validated limits and client-telemetry limits are in the
+[Mobile Feed architecture](../docs/architecture/mobile-feed.md#feedimpression-server-policy-43).
+There is no endpoint that lists impressions and no public metric.
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/feed-impressions \
+  -H "Authorization: Bearer $ACCESS" -H 'Content-Type: application/json' \
+  -d '{"events":[{"event_id":"4f4bb18e-b0e0-4e7f-8cf8-849b7013fa63","story_id":"1","feed_session_id":"dd42a0ee-0727-4796-bd11-dba56f1c498b","position":0,"surface":"HOME_FEED","policy_version":1,"occurred_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}]}'
+# {"results":[{"event_id":"4f4bb18e-...","outcome":"accepted","code":null}]}
+# Repeating the same command returns "duplicate" and changes nothing.
+```
+
+The account and `received_at` come from the server. Invalid structure returns
+400 and writes nothing, bodies over 32 KiB return 413, and more than 60 batches
+per minute per account returns 429 with `Retry-After`. The throttle counters
+live in Django's default per-process cache, so with several processes the bound
+is advisory; it is an operational limit, not fraud protection.
+
+### Retention runbook
+
+Rows are kept for `READING_IMPRESSION_RETENTION_DAYS` (30) days by
+`received_at`. **Nothing deletes them automatically**: retention holds only if an
+operator runs the prune command regularly (for example daily from the host's
+own scheduler). Deleting an account removes its impressions immediately.
+
+```bash
+# Dry run (the default): counts eligible rows and prints the fixed cutoff.
+uv run --locked --env-file .env python manage.py reading_prune_impressions
+# Dry run: 1200 FeedImpression row(s) received before 2026-08-25T09:00:00+00:00 are eligible; ...
+
+# Apply with that same cutoff, 1000 rows per transaction (the default).
+uv run --locked --env-file .env python manage.py reading_prune_impressions \
+  --apply --before 2026-08-25T09:00:00+00:00
+# Deleted 1200 FeedImpression row(s) received before 2026-08-25T09:00:00+00:00 in 2 batch(es); 0 eligible row(s) remain.
+```
+
+`--batch-size` (1–10000) bounds each delete transaction and `--max-batches`
+bounds one run; re-running with the same `--before` resumes where it stopped.
+`--before` may never be later than the `--days` cutoff, so the command cannot
+delete rows still inside retention. Logs record only counts, the cutoff and
+duration.
