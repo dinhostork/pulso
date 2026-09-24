@@ -1,21 +1,22 @@
 """Thin private HTTP adapters for Bookmark and FeedImpression application services."""
 
 import json
-import math
 import time
 
 from rest_framework import serializers, status
-from rest_framework.exceptions import (
-    AuthenticationFailed,
-    NotAuthenticated,
-    ParseError,
-    Throttled,
-)
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
-from rest_framework.views import APIView
 
+from api.http import (
+    PrivateAPIView,
+    error_response,
+    parse_product_id,
+    validated_query,
+    validation_error,
+)
 from news.application.story_cursors import CursorError
+from news.application.story_read import PersistedContractError
+from news.views import INVALID_STORY_ID, READ_ERRORS, log_read, story_read_error
 from reading.application.bookmarks import (
     BookmarkStoryNotFound,
     BookmarkStoryUnavailable,
@@ -23,6 +24,7 @@ from reading.application.bookmarks import (
     remove_bookmark,
     save_bookmark,
 )
+from reading.application.feed import feed_for_viewer, story_detail_for_viewer
 from reading.application.impressions import (
     MAX_BODY_BYTES,
     ImpressionBatchInvalid,
@@ -31,69 +33,22 @@ from reading.application.impressions import (
 )
 from reading.serializers import (
     BookmarkListQuerySerializer,
+    FeedQuerySerializer,
+    serialize_feed_page,
     serialize_saved_entry,
+    serialize_story_detail,
 )
 
 
-def _error(code: str, detail: str, status_code: int, *, fields=None) -> Response:
-    body = {"code": code, "detail": detail}
-    if fields:
-        body["fields"] = fields
-    return Response(body, status=status_code)
-
-
-class PrivateReadingAPIView(APIView):
-    """Apply the private no-store policy even to controlled errors."""
-
-    def finalize_response(self, request, response, *args, **kwargs):
-        response = super().finalize_response(request, response, *args, **kwargs)
-        response["Cache-Control"] = "private, no-store"
-        return response
-
-    def handle_exception(self, exc):
-        if isinstance(exc, (NotAuthenticated, AuthenticationFailed)):
-            return _error(
-                "not_authenticated",
-                "Authentication credentials were not provided.",
-                status.HTTP_401_UNAUTHORIZED,
-            )
-        if isinstance(exc, ParseError):
-            return _error(
-                "validation_error",
-                "The request is invalid.",
-                status.HTTP_400_BAD_REQUEST,
-                fields={"body": ["Malformed request body."]},
-            )
-        if isinstance(exc, Throttled):
-            response = _error("rate_limited", "Try again later.", status.HTTP_429_TOO_MANY_REQUESTS)
-            response["Retry-After"] = str(max(1, math.ceil(exc.wait or 1)))
-            return response
-        return super().handle_exception(exc)
-
-
-class BookmarkListView(PrivateReadingAPIView):
+class BookmarkListView(PrivateAPIView):
     def get(self, request):
-        allowed = {"cursor", "limit"}
-        unknown = sorted(set(request.query_params) - allowed)
-        if unknown:
-            return _error(
-                "validation_error",
-                "The request is invalid.",
-                status.HTTP_400_BAD_REQUEST,
-                fields={name: ["Unknown field."] for name in unknown},
-            )
-        serializer = BookmarkListQuerySerializer(data=request.query_params)
-        if not serializer.is_valid():
-            return _error(
-                "validation_error",
-                "The request is invalid.",
-                status.HTTP_400_BAD_REQUEST,
-                fields=serializer.errors,
-            )
+        query, invalid = validated_query(request, BookmarkListQuerySerializer)
+        if invalid:
+            return invalid
         try:
-            page = list_bookmarks(user=request.user, **serializer.validated_data)
+            page = list_bookmarks(user=request.user, **query)
         except CursorError:
-            return _error(
+            return error_response(
                 "invalid_cursor",
                 "The cursor is invalid or expired.",
                 status.HTTP_400_BAD_REQUEST,
@@ -106,7 +61,7 @@ class BookmarkListView(PrivateReadingAPIView):
         )
 
 
-class BookmarkMutationView(PrivateReadingAPIView):
+class BookmarkMutationView(PrivateAPIView):
     @staticmethod
     def _empty_body(request):
         return isinstance(request.data, dict) and not request.data
@@ -117,7 +72,7 @@ class BookmarkMutationView(PrivateReadingAPIView):
                 str(name): ["Unknown field."]
                 for name in getattr(request.data, "keys", lambda: [])()
             }
-            return _error(
+            return error_response(
                 "validation_error",
                 "The request is invalid.",
                 status.HTTP_400_BAD_REQUEST,
@@ -126,16 +81,18 @@ class BookmarkMutationView(PrivateReadingAPIView):
         try:
             result = save_bookmark(user=request.user, story_id=story_id)
         except ValueError:
-            return _error(
+            return error_response(
                 "validation_error",
                 "The request is invalid.",
                 status.HTTP_400_BAD_REQUEST,
                 fields={"story_id": ["Must be a positive integer."]},
             )
         except BookmarkStoryNotFound:
-            return _error("story_not_found", "The Story was not found.", status.HTTP_404_NOT_FOUND)
+            return error_response(
+                "story_not_found", "The Story was not found.", status.HTTP_404_NOT_FOUND
+            )
         except BookmarkStoryUnavailable:
-            return _error(
+            return error_response(
                 "story_unavailable",
                 "This Story is no longer available.",
                 status.HTTP_410_GONE,
@@ -150,7 +107,7 @@ class BookmarkMutationView(PrivateReadingAPIView):
 
     def delete(self, request, story_id: int):
         if not self._empty_body(request):
-            return _error(
+            return error_response(
                 "validation_error",
                 "The request is invalid.",
                 status.HTTP_400_BAD_REQUEST,
@@ -159,7 +116,7 @@ class BookmarkMutationView(PrivateReadingAPIView):
         try:
             remove_bookmark(user=request.user, story_id=story_id)
         except ValueError:
-            return _error(
+            return error_response(
                 "validation_error",
                 "The request is invalid.",
                 status.HTTP_400_BAD_REQUEST,
@@ -175,19 +132,14 @@ class FeedImpressionThrottle(UserRateThrottle):
 
 
 def _malformed_body(detail: str) -> Response:
-    return _error(
-        "validation_error",
-        "The request is invalid.",
-        status.HTTP_400_BAD_REQUEST,
-        fields={"body": [detail]},
-    )
+    return validation_error({"body": [detail]})
 
 
 def _reject_constant(name: str):
     raise ValueError(f"{name} is not valid JSON")
 
 
-class FeedImpressionBatchView(PrivateReadingAPIView):
+class FeedImpressionBatchView(PrivateAPIView):
     throttle_classes = [FeedImpressionThrottle]
     # The body is size-checked before it is decoded, so DRF parsers are unused.
     parser_classes = []
@@ -205,7 +157,7 @@ class FeedImpressionBatchView(PrivateReadingAPIView):
             return _malformed_body("Invalid Content-Length.")
         if declared > MAX_BODY_BYTES or len(body := request.body) > MAX_BODY_BYTES:
             log_rejected_request("body_too_large", started)
-            return _error(
+            return error_response(
                 "request_too_large",
                 "The request body is too large.",
                 status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -218,12 +170,7 @@ class FeedImpressionBatchView(PrivateReadingAPIView):
         try:
             outcomes = accept_feed_impressions(user=request.user, data=data, started=started)
         except ImpressionBatchInvalid as error:
-            return _error(
-                "validation_error",
-                "The request is invalid.",
-                status.HTTP_400_BAD_REQUEST,
-                fields=error.fields,
-            )
+            return validation_error(error.fields)
         return Response(
             {
                 "results": [
@@ -232,3 +179,42 @@ class FeedImpressionBatchView(PrivateReadingAPIView):
                 ]
             }
         )
+
+
+class FeedView(PrivateAPIView):
+    """GET only: reading the feed never records an impression or triggers processing."""
+
+    def get(self, request):
+        started = time.monotonic()
+        query, invalid = validated_query(request, FeedQuerySerializer)
+        if invalid:
+            log_read("feed_read", "invalid", started)
+            return invalid
+        try:
+            feed = feed_for_viewer(user=request.user, **query)
+        except (*READ_ERRORS, PersistedContractError) as error:
+            log_read("feed_read", error.code, started)
+            return story_read_error(error)
+        log_read("feed_read", "success", started, len(feed.page.results))
+        return Response(serialize_feed_page(feed))
+
+
+class StoryDetailView(PrivateAPIView):
+    def get(self, request, story_id: str):
+        started = time.monotonic()
+        pk = parse_product_id(story_id)
+        if pk is None:
+            log_read("story_detail_read", "invalid", started)
+            return validation_error(INVALID_STORY_ID)
+        if request.query_params:
+            log_read("story_detail_read", "invalid", started)
+            return validation_error(
+                {name: ["Unknown field."] for name in sorted(request.query_params)}
+            )
+        try:
+            viewed = story_detail_for_viewer(user=request.user, story_id=pk)
+        except (*READ_ERRORS, PersistedContractError) as error:
+            log_read("story_detail_read", error.code, started)
+            return story_read_error(error)
+        log_read("story_detail_read", "success", started, 1)
+        return Response(serialize_story_detail(viewed.detail, bookmarked=viewed.bookmarked))

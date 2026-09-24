@@ -218,7 +218,8 @@ decoder or cache.
 timestamps/nulls remain their wire values. Invalid server data becomes a
 controlled `malformed_dto` failure—there is no fixture or invented-data
 fallback. Source navigation additionally rejects non-HTTP(S), credentialed and
-literal local/private destinations.
+literal local/private destinations; a `null` `canonical_url` (a link the server
+withheld as unsafe) decodes as an attributable publication without a link.
 
 `@tanstack/react-query` 5.103.1 is the sole server-state cache. Its package
 metadata supports React 18/19, including this checkout's React 19.2.3. Every

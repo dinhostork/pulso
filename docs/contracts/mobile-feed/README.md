@@ -11,7 +11,7 @@ decoders must validate against the same files.
 | `story-current-viewers.json`       | Equal factual payload for two users; only bookmark metadata differs |
 | `story-updating.json`              | stale/failed fallback as UPDATING                                   |
 | `story-preparing.json`             | ACTIVE with no usable generation                                    |
-| `sources-page.json`                | Deterministic current-member source page                            |
+| `sources-page.json`                | Current-member source page, including one withheld (`null`) link   |
 | `story-unavailable.json`           | 410 unavailable error                                               |
 | `errors.json`                      | Product error/status shapes                                         |
 | `bookmark.json`                    | Idempotent bookmark result and unavailable saved tombstone          |

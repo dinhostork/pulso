@@ -94,7 +94,9 @@ class SourceDTO:
 class SourceArticleDTO:
     id: str
     title: str
-    canonical_url: str
+    # None when the stored URL fails the publication-link safety rules; the
+    # publication stays attributable by title and Source.
+    canonical_url: str | None
     source: SourceDTO
     published_at: datetime | None
     first_seen_at: datetime
@@ -222,13 +224,23 @@ def _safe_url(value: str) -> bool:
 
 
 def _source_article(article: Article, current_ids: set[int]) -> SourceArticleDTO:
-    if not _safe_url(article.canonical_url):
-        raise PersistedContractError("unsafe publication URL")
+    canonical_url = article.canonical_url
+    if not _safe_url(canonical_url):
+        # One bad link must not hide the whole Story or source page (#47).
+        canonical_url = None
+        logger.warning(
+            "Publication link withheld from product read",
+            extra={
+                "operation": "story_read",
+                "outcome": "unsafe_publication_url",
+                "article_id": article.pk,
+            },
+        )
     byline = " ".join(article.byline.split())[:MAX_BYLINE_CHARS] or None
     return SourceArticleDTO(
         id=str(article.pk),
         title=" ".join(article.title.split())[:MAX_PUBLICATION_TITLE_CHARS],
-        canonical_url=article.canonical_url,
+        canonical_url=canonical_url,
         source=SourceDTO(str(article.source_id), article.source.name, article.source.slug),
         published_at=article.published_at,
         first_seen_at=article.first_seen_at,

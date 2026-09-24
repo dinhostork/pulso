@@ -4,10 +4,12 @@
 
 This document is the executable contract for Phase 3 (Mobile Feed). Sections
 marked **contract** describe behavior owned by issues #40–#52; they are not a
-claim that every behavior is already implemented. Issue #41 now implements the
-News-owned factual read DTOs/selectors and cursor primitives. Product HTTP
-endpoints, Reading models, viewer decoration, and the mobile API client remain
-owned by later issues.
+claim that every behavior is already implemented. Issue #41 implements the
+News-owned factual read DTOs/selectors and cursor primitives, #42/#43 the
+Reading models, #44/#45 the mobile API client and sessions, #46 mobile
+navigation, and #47 the authenticated feed, Story detail and source HTTP
+endpoints with viewer decoration. Feed, detail, Saved and exposure screens
+remain owned by #48–#51.
 
 Phase 3 delivers authenticated factual Story reading, source navigation,
 bookmarks, and qualified feed-exposure reporting. Opinion, Position,
@@ -104,7 +106,8 @@ for returned elements, even when an Article is no longer a current member.
 | Field                                                  | Wire type                |
 | ------------------------------------------------------ | ------------------------ |
 | `id`, `source.id`                                      | decimal strings          |
-| `title`, `canonical_url`, `source.name`, `source.slug` | strings                  |
+| `title`, `source.name`, `source.slug`                  | strings                  |
+| `canonical_url`                                        | string or `null`         |
 | `published_at`                                         | timestamp or `null`      |
 | `first_seen_at`                                        | timestamp                |
 | `byline`                                               | string or `null`         |
@@ -113,6 +116,9 @@ for returned elements, even when an Article is no longer a current member.
 
 The canonical URL must be HTTP(S), have a host, contain no credentials or
 control characters, and not use literal loopback/private/link-local addresses.
+A stored URL that fails these checks is returned as `null` (#47): the
+publication stays attributable by title and Source, the client shows the link
+as unavailable, and one bad URL never fails a whole detail or source page.
 No DNS lookup, fetch, proxy, WebView, token, or Authorization header is used
 when opening a publisher URL.
 
@@ -166,11 +172,11 @@ not blocked.
 All product endpoints require the existing bearer authentication and use no
 trailing slash.
 
-| Method/path                           | Input                                    | Success                             | Owner / implementation status after #40 |
+| Method/path                           | Input                                    | Success                             | Owner / implementation status           |
 | ------------------------------------- | ---------------------------------------- | ----------------------------------- | --------------------------------------- |
-| `GET /api/feed`                       | `cursor?`, `limit?` (20 default, 50 max) | 200 StoryCard page                  | Reading + News / planned #47            |
-| `GET /api/stories/{story_id}`         | positive decimal ID                      | 200 StoryDetail                     | News + viewer decoration / planned #47  |
-| `GET /api/stories/{story_id}/sources` | `cursor?`, `limit?`, `synthesis_id?`     | 200 SourceArticle page              | News / planned #47                      |
+| `GET /api/feed`                       | `cursor?`, `limit?` (20 default, 50 max) | 200 StoryCard page                  | Reading + News / implemented #47        |
+| `GET /api/stories/{story_id}`         | positive decimal ID                      | 200 StoryDetail                     | News + Reading decoration / impl. #47   |
+| `GET /api/stories/{story_id}/sources` | `cursor?`, `limit?`, `synthesis_id?`     | 200 SourceArticle page              | News / implemented #47                  |
 | `GET /api/bookmarks`                  | `cursor?`, `limit?`                      | 200 saved page including tombstones | Reading / implemented #42               |
 | `PUT /api/bookmarks/{story_id}`       | empty body                               | 200 bookmark result                 | Reading / implemented #42               |
 | `DELETE /api/bookmarks/{story_id}`    | no body                                  | 204, present or absent              | Reading / implemented #42               |
@@ -182,6 +188,39 @@ context or idempotency conflict, 410 unavailable, 413 oversized body, 429
 rate limited (with `Retry-After`), and generic 5xx. Unknown request fields and
 client-supplied `user_id` are rejected. Existing authentication error bodies
 remain unchanged and are normalized by the mobile transport.
+
+### HTTP adapters (#47)
+
+| Layer | Module | Responsibility |
+| --- | --- | --- |
+| Shared envelope | `backend/api/http.py` | `{code,detail,fields}` errors, `private, no-store`, 401/429 normalization, strict query and decimal-ID validation |
+| News | `backend/news/serializers.py`, `news/views.py` | Explicit factual field allowlists; the user-independent source-list adapter; News read-error translation |
+| Reading | `backend/reading/application/feed.py`, `reading/views.py` | Feed and detail composition: the News DTO plus one batched `viewer.bookmarked` lookup |
+
+Only GET (and the HEAD Django derives from it) is routed; every other method
+returns 405. Story IDs in paths must be positive decimal strings within
+`bigint` without sign or leading zeros; anything else returns 400
+`validation_error` with `fields.story_id`, never an HTML 404. `limit` outside
+1–50 returns `{"limit": ["Must be between 1 and 50."]}`; tampered, expired or
+cross-scope cursors return 400 `invalid_cursor`; a `synthesis_id` from another
+Story returns 400 with `fields.synthesis_id`. Every response, including
+errors, carries `Cache-Control: private, no-store`; there is no application
+response cache. A News read failure that indicates corrupt persisted data
+returns the generic 500 body.
+
+No GET or HEAD writes a row, records a FeedImpression, calls a provider or
+fetcher, or dispatches a worker task; tests replace those entry points with
+failures. Citation metadata is the cited Article's **current** row read in the
+same snapshot: it resolves even when the Article left the Story or is not on
+the requested source page, but it is not a stored copy of the page as it was
+when the synthesis was generated.
+
+Measured full request paths, including JWT user lookup and bookmark
+decoration: feed 10 SQL statements for both 1 and 50 cards (1 user lookup, 8
+snapshot statements including `BEGIN`/`SET TRANSACTION`/`COMMIT`, 1 bookmark
+lookup), detail 13, sources 6. The enforced budget is 15 with equal counts for
+pages of 1 and 50. Reading decorates after the factual snapshot closes, so the
+bookmark flag reflects the account's state at response time.
 
 ## Pagination
 

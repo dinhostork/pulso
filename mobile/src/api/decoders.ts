@@ -158,7 +158,7 @@ export function decodeSourceArticle(value: unknown, path = "source_article"): So
   return {
     id: id(row.id, `${path}.id`),
     title: nonemptyString(row.title, `${path}.title`),
-    canonical_url: externalHttpUrl(row.canonical_url, `${path}.canonical_url`),
+    canonical_url: nullable(row.canonical_url, `${path}.canonical_url`, externalHttpUrl),
     source: {
       id: id(source.id, `${path}.source.id`),
       name: nonemptyString(source.name, `${path}.source.name`),

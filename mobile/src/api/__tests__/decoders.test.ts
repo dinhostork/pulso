@@ -43,7 +43,7 @@ describe("Mobile Feed contract decoders", () => {
       synthesized_at: null,
       elements: [],
     });
-    expect(decodeSourcePage(sources).results).toHaveLength(2);
+    expect(decodeSourcePage(sources).results).toHaveLength(3);
     expect(decodeFeedImpressionResponse(impressions.response).results[0].outcome).toBe("accepted");
     expect(decodeBookmarkResult(bookmark.saved).story_id).toBe("9007199254740993");
     expect(
@@ -77,5 +77,12 @@ describe("Mobile Feed contract decoders", () => {
     };
     privateSource.results[0].canonical_url = "http://127.0.0.1/private";
     expect(() => decodeSourcePage(privateSource)).toThrow(DecodeError);
+  });
+
+  it("keeps a publication whose link the server withheld", () => {
+    const page = decodeSourcePage(sources);
+    const withheld = page.results.find((row) => row.canonical_url === null);
+    expect(withheld?.title).toBe("Restoration budget explained");
+    expect(withheld?.source.name).toBe("Three Weekly");
   });
 });

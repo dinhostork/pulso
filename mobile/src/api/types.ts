@@ -32,7 +32,8 @@ export interface SourceIdentity {
 export interface SourceArticle {
   id: string;
   title: string;
-  canonical_url: string;
+  /** Null when the server withheld an unsafe stored link; the publication stays attributable. */
+  canonical_url: string | null;
   source: SourceIdentity;
   published_at: string | null;
   first_seen_at: string;

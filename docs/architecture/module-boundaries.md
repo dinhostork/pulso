@@ -10,7 +10,7 @@ independent deployable services. This maps
 | Path | Responsibility |
 | --- | --- |
 | `backend/config/` | Shared application wiring (`common`), separate development/test settings, URL composition and ASGI/WSGI entry points |
-| `backend/api/` | Product HTTP route registry; currently mounts authentication routes under `/api/auth/` |
+| `backend/api/` | Product HTTP route registry (`/api/auth/`, Reading and News product routes) and the shared private HTTP envelope in `api/http.py`; no domain rules |
 | `backend/health/` | Unauthenticated liveness/readiness endpoints and bounded dependency probes (issue #5); not part of the product API |
 | `backend/accounts/` | Account identity, Django model integration, initial migration and JWT login/logout/refresh/current-user endpoints (issue #6, ADR-0009) |
 | `backend/database/` | Shared PostgreSQL extension migration; no product models |
@@ -19,7 +19,11 @@ independent deployable services. This maps
 
 The Phase 3 `reading` module (`backend/reading/`) owns private Bookmarks (#42)
 and FeedImpressions (#43): models, application services, thin DRF adapters and
-the `reading_prune_impressions` retention command. See the
+the `reading_prune_impressions` retention command. It also composes the
+authenticated feed and Story detail with viewer decoration (#47), while News
+serializes the factual fields and adapts the user-independent source list
+(`news/serializers.py`, `news/views.py`). The endpoint map is in the
+[Mobile Feed architecture](mobile-feed.md#http-adapters-47). See the
 [Mobile Feed architecture](mobile-feed.md) and
 [ADR-0011](../adr/0011-reading-ownership-and-story-references.md).
 

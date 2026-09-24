@@ -1,11 +1,17 @@
-"""Wire serialization and bounded request validation for Bookmark HTTP adapters."""
+"""Viewer-decorated wire serialization and request validation for Reading HTTP adapters."""
 
 from rest_framework import serializers
 
+from api.http import PageQuerySerializer
+from news.serializers import story_card_facts, story_detail_facts
 
-class BookmarkListQuerySerializer(serializers.Serializer):
-    cursor = serializers.CharField(required=False, allow_blank=False, max_length=4096)
-    limit = serializers.IntegerField(required=False, min_value=1, max_value=50, default=20)
+
+class BookmarkListQuerySerializer(PageQuerySerializer):
+    pass
+
+
+class FeedQuerySerializer(PageQuerySerializer):
+    pass
 
 
 def _timestamp(value):
@@ -13,34 +19,21 @@ def _timestamp(value):
 
 
 def serialize_story_card(card, *, bookmarked: bool) -> dict:
+    return {**story_card_facts(card), "viewer": {"bookmarked": bookmarked}}
+
+
+def serialize_story_detail(detail, *, bookmarked: bool) -> dict:
+    return {**story_detail_facts(detail), "viewer": {"bookmarked": bookmarked}}
+
+
+def serialize_feed_page(feed) -> dict:
     return {
-        "id": card.id,
-        "language": card.language,
-        "created_at": _timestamp(card.created_at),
-        "first_published_at": (
-            _timestamp(card.first_published_at) if card.first_published_at else None
-        ),
-        "last_published_at": (
-            _timestamp(card.last_published_at) if card.last_published_at else None
-        ),
-        "content_state": card.content_state,
-        "synthesis_id": card.synthesis_id,
-        "synthesized_at": _timestamp(card.synthesized_at) if card.synthesized_at else None,
-        "title": card.title,
-        "elements": [
-            {
-                "id": element.id,
-                "kind": element.kind,
-                "position": element.position,
-                "text": element.text,
-                "article_ids": list(element.article_ids),
-            }
-            for element in card.elements
+        "results": [
+            serialize_story_card(card, bookmarked=int(card.id) in feed.bookmarked)
+            for card in feed.page.results
         ],
-        "topics": [{"slug": topic.slug, "label": topic.label} for topic in card.topics],
-        "article_count": card.article_count,
-        "source_count": card.source_count,
-        "viewer": {"bookmarked": bookmarked},
+        "next_cursor": feed.page.next_cursor,
+        "ordering": feed.page.ordering,
     }
 
 

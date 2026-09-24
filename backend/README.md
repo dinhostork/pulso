@@ -1226,8 +1226,8 @@ readiness health endpoints and mobile API authentication. It retains the
 issue #1 custom User and package boundaries. Database runtime validation is
 now possible using Compose; host-only checks still require a reachable
 configured PostgreSQL to verify applied migration history. News ingestion and
-the Story Engine are documented above; product HTTP APIs for Stories do not
-exist yet.
+the Story Engine are documented above; the authenticated product read APIs are
+in [Story reads](#story-reads) below.
 
 See [module boundaries](../docs/architecture/module-boundaries.md).
 
@@ -1703,6 +1703,61 @@ access token used as a refresh token), logout (missing field, already-used
 refresh token, blocking further refresh), the documented residual-validity
 window on an already-issued access token after logout, and that neither
 login nor logout requires a CSRF token (`Client(enforce_csrf_checks=True)`).
+
+## Story reads
+
+Three authenticated, read-only endpoints expose the News read model (#41) with
+Reading's bookmark decoration (#42); ownership, validation and the measured
+query budget are in the
+[Mobile Feed architecture](../docs/architecture/mobile-feed.md#http-adapters-47),
+and the exact wire shapes in [`docs/contracts/mobile-feed/`](../docs/contracts/mobile-feed/).
+Every response carries `Cache-Control: private, no-store`; no request writes,
+records an impression, fetches or dispatches work.
+
+| Method | Path | Returns |
+| --- | --- | --- |
+| `GET` | `/api/feed?limit=20&cursor=…` | CURRENT Stories, newest first, same order for every account |
+| `GET` | `/api/stories/{id}` | CURRENT/UPDATING/PREPARING detail with complete citations |
+| `GET` | `/api/stories/{id}/sources?limit=20&synthesis_id=…&cursor=…` | Current member publications, `Article.id` ascending |
+
+With `$ACCESS` from [login](#executable-request-examples):
+
+```bash
+AUTH="Authorization: Bearer $ACCESS"
+curl -s "http://127.0.0.1:8000/api/feed?limit=2" -H "$AUTH"
+# 200 {"results":[{"id":"45",...,"content_state":"CURRENT",...,"viewer":{"bookmarked":false}}],
+#      "next_cursor":"…","ordering":"story_created_desc_v1"}
+curl -s "http://127.0.0.1:8000/api/feed?limit=2&cursor=$NEXT" -H "$AUTH"   # next page
+
+curl -s http://127.0.0.1:8000/api/stories/45 -H "$AUTH"
+# 200 CURRENT: elements, topics, entities, citations{article_id: SourceArticle},
+#     "sources_path":"/api/stories/45/sources?synthesis_id=90"
+# 200 UPDATING: the previous coherent synthesis while membership awaits refresh
+# 200 PREPARING: {"title":"Story being prepared","elements":[],"citations":{},...}
+
+curl -s "http://127.0.0.1:8000/api/stories/45/sources?synthesis_id=90&limit=20" -H "$AUTH"
+# 200 {"results":[{"id":"120","title":"…","canonical_url":"https://…",...}],"next_cursor":null}
+```
+
+| Situation | Status | Body `code` |
+| --- | --- | --- |
+| No, malformed, expired or refresh-type bearer token | 401 | `not_authenticated` |
+| Unknown Story ID | 404 | `story_not_found` |
+| Archived Story or no current members | 410 | `story_unavailable` |
+| Source membership or synthesis context changed since the cursor | 409 | `source_context_changed` (restart without the cursor) |
+| Tampered, expired or cross-endpoint cursor | 400 | `invalid_cursor` |
+| Invalid ID, `limit` outside 1–50, unknown query field | 400 | `validation_error` with `fields` |
+
+```bash
+curl -s http://127.0.0.1:8000/api/stories/999999999 -H "$AUTH"
+# 404 {"code":"story_not_found","detail":"The Story was not found."}
+curl -s "http://127.0.0.1:8000/api/feed?limit=51" -H "$AUTH"
+# 400 {"code":"validation_error","detail":"The request is invalid.","fields":{"limit":["Must be between 1 and 50."]}}
+```
+
+A publication whose stored URL fails the link-safety rules is returned with
+`"canonical_url": null` and stays attributable by title and Source. Tests:
+`uv run --locked pytest tests/reading/test_story_http.py tests/news/test_story_read.py`.
 
 ## Feed impressions
 
