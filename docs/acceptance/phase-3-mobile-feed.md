@@ -13,6 +13,7 @@ as run was not run.
 | Citation across layers | The same module produces [`reading-loop.json`](../contracts/mobile-feed/README.md) from a corpus Story (IDs renumbered, two server-clock timestamps pinned) and fails if the fixture drifts; `mobile/src/integration/__tests__/readingLoop.test.tsx` decodes it and asserts the displayed citation row's publisher, title and hand-off URL, including a previous-generation citation whose Article left the Story | both suites |
 | Private writes | Bookmark PUT/DELETE repeated after a lost response leave one row with the original `saved_at`; a replayed FeedImpression batch is `duplicate` with the stored row unchanged; account B sees and removes none of A's state; an archived Saved Story (real reprocessing) is a removable tombstone and cannot be re-saved | backend suite |
 | Reading loop | Real login → Feed → save → detail → Saved → refresh-token restore → Saved still from the server → remove → Feed/detail updated; a second account sees nothing | backend suite |
+| Bookmark/refresh ordering | A Feed refresh answered before a save or removal committed, and released after the confirmation, keeps the confirmed state for that Story while other Stories take the response's values (both directions, deterministic held responses) | `npm run test:ci` |
 | Mobile loop | Sign in, Feed, detail, citation hand-off, sources, save, Saved, token expiry with single refresh and replay, removal, prior-generation citation, exposure delivery failure and retry with the same event, logout and account switch, through the real transport, decoders, session controller, cache and screens | `npm run test:ci` |
 | Feature tests | #41–#51 feature suites, unchanged, plus the #50 bookmark suites | backend `pytest`, mobile `test:ci` |
 | Web build | `npx expo export --platform web` succeeds and exports only the Phase 3 routes | CI mobile job |
@@ -66,6 +67,33 @@ the backend database for the disposable smoke account only.
 
 Automated only: the exact 49% and 999 ms boundaries.
 
+### Bookmarks and Saved (#50) — passed
+
+Same device, runtime, backend path and 176-Story data set, with two
+disposable local accounts created for this smoke and deleted afterwards:
+
+- **Save from Feed:** the card changed to "Saved" with "Remove from Saved";
+  the Story's detail showed the same state; the Saved tab listed the Story;
+  the server held exactly one Bookmark for the account.
+- **Remove:** removing it from the Saved tab left the explicit "No saved
+  Stories" state on the same route; without a restart the Feed card and the
+  detail showed "Save" again and no screen claimed Saved; the server held no
+  Bookmark.
+- **Restart:** after saving again from the detail, the Expo Go process was
+  terminated and cold-started. The session was restored (refresh, then
+  `/me`), the Feed card showed Saved and the Saved tab listed the Story, both
+  from fresh `GET /api/feed` and `GET /api/bookmarks` responses.
+- **Account isolation:** with account A's Bookmark still on the server, A
+  signed out and B signed in on the same device: B's Feed showed no Saved
+  label or remove control for that Story, and B's Saved tab was empty.
+- **Saved and FeedImpressions:** after the Feed's own queued exposures had
+  flushed, 25 s on the Saved tab with its card fully visible, including a
+  pull-to-refresh, added no FeedImpression row; the backend received only
+  `GET /api/bookmarks` in that window.
+
+Not run natively: the archived Saved tombstone (covered by the backend
+integration test with real reprocessing and by Jest).
+
 ### Session restore — observed
 
 During the process-death case below, the cold restart restored the session
@@ -76,7 +104,7 @@ from SecureStore and opened the Feed without a sign-in.
 | Target or check | Status |
 | --- | --- |
 | iOS (any device or simulator) | **Not run.** No macOS/Xcode/iOS target was available in the validation environment. This is a recorded platform acceptance exception, not a pass; iOS behavior is covered only by shared code and Jest. |
-| Bookmarks and Saved (#50) on a device | Not run natively; covered by the #50 Jest suites, the mobile integration suite and the backend integration suite above |
+| Archived Saved tombstone on a device | Not run natively (backend integration and Jest only) |
 | TalkBack screen reader | Not run |
 | Real mobile-network throttling | Not run |
 | Small-screen physical device | Not run (only the 1080×2400 device above) |
@@ -106,6 +134,17 @@ Observed on the device above: with the process alive, publisher browser →
 back returned to the same Sources route. On two of the round trips Android's
 low-memory killer terminated Expo Go while Firefox was in front; Pulso then
 cold-started into the Feed with the session restored.
+
+### Defect found during the native smoke
+
+A device still holding the refresh token of an account that was deleted
+afterwards could not recover by itself: `POST /api/auth/refresh` returned 500
+instead of 401, because the installed SimpleJWT `TokenRefreshSerializer`
+looks the user up without handling a missing row. The app therefore showed
+"Pulso could not reach the server to restore your session" with Try again
+instead of returning to sign-in; "Sign out" cleared the local credential and
+recovered. It affects only tokens of deleted accounts. It is recorded here
+and not fixed in Phase 3.
 
 ### Other limitations
 
@@ -149,6 +188,6 @@ Results on the commit that records this document, run locally with the CI comman
 | Backend `pytest` | 1090 passed, 7 deselected (the 5 `celery_smoke` and 2 opt-in `local_embedding` tests) |
 | Worker smoke `pytest -m celery_smoke` | 5 passed, against a separately running worker |
 | Ruff lint / format, Django checks, migration drift | Pass / pass / pass / no changes |
-| Mobile Jest (`test:ci`) | 28 suites, 325 tests passed (collection checked with `npx jest --listTests`) |
+| Mobile Jest (`test:ci`) | 29 suites, 329 tests passed (collection checked with `npx jest --listTests`) |
 | Expo Doctor, ESLint, Prettier, TypeScript | 21/21 / pass / pass / pass |
 | Web export route check | Pass (15 route files: the 7 Phase 3 routes plus group aliases) |
