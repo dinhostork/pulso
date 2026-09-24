@@ -12,6 +12,7 @@ import {
   type ProductHandler,
   type ProductRequest,
 } from "@/test-utils/readingApp";
+import { hostNodes, refreshControl } from "@/test-utils/hostNodes";
 import { deferred, feedPage, storyCard, type Deferred } from "@/test-utils/stories";
 
 import type { CardVisibility } from "../visibility";
@@ -73,27 +74,6 @@ function list() {
 /** `fireEvent` reaches FlatList's `onEndReached` from the list's host scroll view. */
 async function endReached(distanceFromEnd = 0) {
   await fireEvent(list(), "endReached", { distanceFromEnd });
-}
-
-type HostNode = ReturnType<typeof screen.getByTestId>;
-
-/** Every rendered host element, to find the refresh control and prove no media exists. */
-function hostNodes(): HostNode[] {
-  const nodes: HostNode[] = [];
-  const visit = (node: HostNode) => {
-    nodes.push(node);
-    for (const child of node.children) {
-      if (typeof child === "object" && child !== null) visit(child as HostNode);
-    }
-  };
-  visit(screen.root as HostNode);
-  return nodes;
-}
-
-function refreshControl(): HostNode {
-  const control = hostNodes().find((node) => node.type === "RCTRefreshControl");
-  if (!control) throw new Error("The Feed has no refresh control");
-  return control;
 }
 
 /** `fireEvent` reaches RefreshControl's `onRefresh` from its host node. */

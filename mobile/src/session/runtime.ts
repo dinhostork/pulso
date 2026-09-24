@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 
 import { createMobileApi, type MobileApi } from "@/api/client";
 import { createTransport } from "@/api/transport";
+import { ImpressionQueue } from "@/features/impressions/queue";
 import { queryClient as sharedQueryClient } from "@/server-state/query";
 
 import { SessionApi } from "./auth-api";
@@ -13,6 +14,8 @@ export interface SessionRuntime {
   api: MobileApi;
   /** The server-state cache the controller clears on every account boundary. */
   queryClient: QueryClient;
+  /** FeedImpression delivery, cleared on every account boundary. */
+  impressions: ImpressionQueue;
 }
 
 export interface SessionRuntimeOptions {
@@ -25,7 +28,9 @@ export interface SessionRuntimeOptions {
 
 /**
  * Wires one transport to one session controller: product and auth requests
- * share the same access token, epoch guard and single-flight refresh.
+ * share the same access token, epoch guard and single-flight refresh. The
+ * impression queue follows the controller's session changes, so it never
+ * outlives the account that produced its events.
  */
 export function createSessionRuntime(options: SessionRuntimeOptions = {}): SessionRuntime {
   let controller: SessionController | null = null;
@@ -46,7 +51,13 @@ export function createSessionRuntime(options: SessionRuntimeOptions = {}): Sessi
     queryClient,
     refreshTokenStore: options.refreshTokenStore ?? createRefreshTokenStore(),
   });
-  return { controller, api: createMobileApi(transport), queryClient };
+  const api = createMobileApi(transport);
+  const impressions = new ImpressionQueue({
+    send: (events, signal) => api.reportFeedImpressions(events, signal),
+    now: () => Date.now(),
+  });
+  controller.subscribeSessionChanges((change) => impressions.onSessionChange(change));
+  return { controller, api, queryClient, impressions };
 }
 
 export const sessionRuntime = createSessionRuntime();

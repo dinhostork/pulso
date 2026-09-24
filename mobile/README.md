@@ -127,6 +127,7 @@ src/
   features/           feature screens rendered by the routes (feed, bookmarks, stories)
     feed/             Feed query/chain, Story card, visibility seam (#48)
     stories/          Story detail and source screens, their queries and labels (#49)
+    impressions/      FeedImpression policy, qualifier, session adapter and queue (#51)
   navigation/         tab bar, stack, route parsing/hrefs and the external publisher seam
   server-state/       TanStack Query client, account-scoped keys and retry policy
   session/            credential storage, session controller, provider and session UI
@@ -290,8 +291,98 @@ present, cell layouts and the scroll viewport feed `FeedVisibilityTracker`
 cards: `position` is the zero-based absolute rendered position, and `share`
 is visible height divided by the smaller of card and viewport height (so a
 card taller than the screen counts as fully visible when it fills it).
-Fetching, page receipt, mounting and rendering report nothing, and #48 sends no
-FeedImpression; qualification and delivery belong to #51.
+Fetching, page receipt, mounting and rendering report nothing; the reports feed
+[FeedImpression qualification](#feedimpressions) and nothing else.
+
+## FeedImpressions
+
+A FeedImpression is a **client-reported qualified exposure of a Story card on
+HOME_FEED** ([ADR-0012](../docs/adr/0012-qualified-feed-impressions.md)). It is
+not API delivery, fetch, mount, render, click, open, vote, agreement or
+verified attention. Saved and Story/source screens never produce one.
+`src/features/impressions/` holds the policy, the pure qualifier, the adapter
+and the delivery queue.
+
+### Client policy v1
+
+| Value            | v1                                                                                                                                             | Why                                                                                                                                                          |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Visible share    | ≥ 50% (exactly 50% qualifies)                                                                                                                  | Visible height ÷ min(card height, viewport height), so a card taller than the screen (long text, large accessibility type) qualifies by filling the viewport |
+| Continuous dwell | ≥ 1000 ms (exactly 1000 ms qualifies)                                                                                                          | The common 50%/1 s viewability convention; flings and fast taps into a Story stay below it                                                                   |
+| Gate             | Feed route focused **and** app `active`                                                                                                        | Detail, Sources and Saved screens unfocus the Feed; `background` and `inactive` close the gate; any close resets every dwell                                 |
+| Once per         | account × `feed_session_id` × Story                                                                                                            | Scrolling away and back, rerenders and detail visits never repeat a Story                                                                                    |
+| `policy_version` | 1                                                                                                                                              | Changing a qualification value requires a new version                                                                                                        |
+| Queue            | 100 events in memory; overflow drops the new event                                                                                             | Five full batches; never persisted                                                                                                                           |
+| Batch            | 20 events                                                                                                                                      | The server's maximum (#43); ≈5 KiB of its 32 KiB limit                                                                                                       |
+| Flush            | a full batch at once, otherwise 5 s after the oldest queued event; also best effort when the Feed loses focus or the app leaves the foreground | ≤ 12 requests/min against the server's advisory 60/min                                                                                                       |
+| In flight        | one request                                                                                                                                    | No overlapping batches                                                                                                                                       |
+| Retry            | network, timeout, 401 (after the session's own replay) and 5xx: 3 retries at 2 s, 4 s, 8 s, then dropped                                       | Rides out short outages well inside the TTL                                                                                                                  |
+| 429              | wait `Retry-After` (30 s if absent) without spending retries                                                                                   | Events whose wait passes the TTL expire                                                                                                                      |
+| Terminal         | 400/413 and other 4xx drop the batch; per-event `rejected` drops the event                                                                     | Never retried                                                                                                                                                |
+| TTL              | 10 minutes from queueing                                                                                                                       | Far inside the server's 24-hour `occurred_at` window                                                                                                         |
+
+**Validation evidence and its limits.** The values were checked against the
+#43 server bounds above and with fake-clock tests at every boundary:
+49%/50% share, 999/1000 ms, ordinary, tall and large-text card geometry,
+rapid scrolling, fast taps, focus and background/inactive transitions, the
+5 s and full-batch flushes, the 2/4/8 s retries and their cap, `Retry-After`
+inside and beyond the TTL, overflow and expiry. These are unit and
+component-level results on Jest; **the issue's native-device validation (real
+viewability on Android/iOS, accessibility text sizes, real network
+conditions) has not been performed in this change** and remains a manual
+acceptance step for #52. If that validation changes a qualification value,
+`POLICY_VERSION` must change with it.
+
+### Lifecycle
+
+```mermaid
+flowchart LR
+    Geometry[Cell layouts + scroll viewport] --> Tracker[FeedVisibilityTracker<br/>visible share, absolute position]
+    Tracker --> Qualifier[ExposureQualifier<br/>pure: share ≥ 50% for 1000 ms<br/>while gate open, once per session]
+    Gate[Route focus × AppState active] --> Qualifier
+    Qualifier -->|qualified| Controller[FeedExposureController<br/>feed_session_id, event UUID, occurred_at]
+    Controller -->|enqueue with session epoch| Queue[ImpressionQueue<br/>100 max, TTL 10 min, 1 in flight]
+    Queue -->|≤ 20 events| API[POST /api/feed-impressions]
+    API -->|accepted / duplicate / rejected| Queue
+    Session[SessionController session change] -->|clear queue, timers, in-flight| Queue
+```
+
+- **Feed session.** A cryptographically secure v4 UUID (`expo-crypto`; there
+  is no `Math.random` fallback — without a secure generator no event is
+  produced) starts when the signed-in Feed mounts and after each
+  **successful** explicit refresh or restart. It survives pagination,
+  rerenders, detail visits and automatic refetch; a failed refresh keeps it.
+  Cold start and account change end it.
+- **Events** carry exactly `event_id`, `story_id`, `feed_session_id`,
+  `position` (zero-based absolute rendered position when the Story first
+  qualified), `surface: "HOME_FEED"`, `policy_version: 1` and `occurred_at`
+  (the qualifying instant). The payload is frozen when queued, so every retry
+  after a lost response resends the same UUIDs and timestamps.
+- **Acknowledgements.** `accepted` and `duplicate` are delivered; `rejected`
+  (for example `event_conflict`, `story_not_found`) is dropped with a counter;
+  an event missing from the response backs off like a retry.
+- **Retry ownership.** The queue calls the API directly: no TanStack mutation
+  and no transport retry. A 401 is refreshed and replayed once by the shared
+  single-flight session refresh underneath.
+- **Account boundary.** The queue follows `subscribeSessionChanges`: logout,
+  expiry or a new sign-in clears queued events and timers, aborts the in-flight
+  request and ignores its late outcome, and the queue rejects events produced
+  under an earlier session epoch. Account A's exposures are never sent with
+  account B's credentials.
+- **Reading never waits.** Rendering, pagination and navigation do not depend
+  on delivery; failures stay invisible to the reader (no modal or banner).
+
+### Privacy and limitations
+
+No arbitrary properties, publisher URLs, Article text, device fingerprint,
+advertising ID, location, IP/User-Agent capture, click analytics or
+third-party analytics SDK. Diagnostics are content-free counters
+(`queued`, `acknowledged`, `duplicate`, `rejected` by code, `dropped` by
+reason, `requests`) readable from the queue; they carry no event, session or
+Story identifiers and are not logged. Delivery is best effort: the queue lives
+only in memory, so process death, a force quit or an OS kill while
+backgrounded loses queued events, and exposures remain forgeable client
+reports. The server keeps accepted rows for 30 days (#43).
 
 ## Story details and sources
 
@@ -552,7 +643,14 @@ and render the sign-in screen and protected routing with
 and Android back, invalid IDs, not-found and publisher hand-off; component and
 theme tests cover roles, states, touch targets, focus, wrapping and contrast.
 
-Story tests (`src/features/stories/__tests__/`) cover CURRENT, UPDATING,
+Impression tests (`src/features/impressions/__tests__/`) use fake clocks and
+deterministic promises for the qualifier boundaries (share, dwell, gates, tall
+and large-text cards, rapid scrolling, sessions, positions), the queue (bound,
+overflow, TTL, batch and timed flush, one in flight, network/5xx retry and cap,
+429, partial acknowledgement, identical replay, account races) and the Feed
+end to end (mount/prefetch, fast tap, detail and Saved, background, refresh
+success/failure, 401 replay, telemetry failure, A-then-B sign-in). Story tests
+(`src/features/stories/__tests__/`) cover CURRENT, UPDATING,
 PREPARING, 404/410 and retry, synthesis labels and times, element citations
 without paging, prior-generation citations, repeated publishers, withheld
 links, optional byline/date/Context/Entities, source pagination, one 409

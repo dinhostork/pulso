@@ -78,3 +78,19 @@ retention by receipt time applied by an operator command. The evidence and
 trade-offs are recorded in the
 [Mobile Feed architecture](../architecture/mobile-feed.md#feedimpression-server-policy-43).
 Client qualification and queue values remain owned by #51.
+
+### Client policy (#51)
+
+Issue #51 implements client policy version 1 in `mobile/src/features/impressions/`:
+a card qualifies when at least 50% of it (measured against the smaller of card
+and viewport height, so tall and large-text cards can qualify) is visible for
+1000 continuous ms while the Feed route is focused and the app is active, at
+most once per account, feed session and Story. Feed sessions are secure UUIDs
+that start on Feed initialization and after a successful explicit refresh.
+Delivery keeps the proposed bounds: 100 in-memory events, batches of 20, a
+5-second flush, one request in flight, three retries with 2/4/8-second backoff,
+`Retry-After` for 429 and a 10-minute TTL. These values are backed by the #43
+server bounds and fake-clock boundary tests; native-device viewability,
+accessibility-size and network validation was not performed with #51 and is a
+manual acceptance step for #52. The rationale and evidence are recorded in the
+[mobile README](../../mobile/README.md#feedimpressions).

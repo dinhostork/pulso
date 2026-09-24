@@ -442,7 +442,13 @@ citations resolve from detail metadata (including non-members), a 409 source
 context change restarts pagination once and then waits for an explicit
 reload, and publisher links reach the OS browser only after the shared
 `isSafePublisherUrl` rule (see
-[mobile/README.md](../../mobile/README.md#story-details-and-sources)).
+[mobile/README.md](../../mobile/README.md#story-details-and-sources)). Issue
+#51 implements the client side of FeedImpression: a pure qualifier over the
+Feed's visibility seam (policy v1: 50% for 1000 ms while focused and
+foregrounded, once per feed session), secure UUID sessions and events, and the
+bounded in-memory queue that alone owns delivery retry and is cleared on every
+session change (see
+[mobile/README.md](../../mobile/README.md#feedimpressions)).
 
 Native Android/iOS reading behavior is the Phase 3 acceptance target. Web must
 continue to compile/render, but production browser CORS and deployment are

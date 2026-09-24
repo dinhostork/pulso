@@ -9,6 +9,7 @@ import { renderRouter } from "expo-router/testing-library";
 import type { ComponentType } from "react";
 
 import { MobileApiProvider } from "@/api/MobileApiProvider";
+import { ImpressionQueueProvider } from "@/features/impressions/FeedImpressions";
 
 import TabsLayout from "@/app/(app)/(tabs)/_layout";
 import FeedRoute from "@/app/(app)/(tabs)/index";
@@ -145,9 +146,11 @@ export function readingRoutes(
     _layout: () => (
       <QueryClientProvider client={runtime.queryClient}>
         <MobileApiProvider api={runtime.api}>
-          <SessionProvider controller={runtime.controller}>
-            <Stack screenOptions={{ headerShown: false }} />
-          </SessionProvider>
+          <ImpressionQueueProvider queue={runtime.impressions}>
+            <SessionProvider controller={runtime.controller}>
+              <Stack screenOptions={{ headerShown: false }} />
+            </SessionProvider>
+          </ImpressionQueueProvider>
         </MobileApiProvider>
       </QueryClientProvider>
     ),

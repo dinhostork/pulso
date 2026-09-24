@@ -16,6 +16,7 @@ import { AppText } from "@/components/AppText";
 import { Button } from "@/components/Button";
 import { Screen } from "@/components/Screen";
 import { EmptyState, ErrorState, LoadingState } from "@/components/StatusState";
+import { useFeedExposure } from "@/features/impressions/FeedImpressions";
 import { storyHref, storySourcesHref } from "@/navigation/routes";
 import { AccountActions } from "@/session/components/AccountActions";
 import { useAccountId } from "@/session/SessionProvider";
@@ -131,7 +132,7 @@ function Footer({ feed, onRestart }: { feed: FeedController; onRestart: () => vo
 export function FeedScreen({
   onVisibilityChange,
 }: {
-  /** The #51 exposure seam (a stable callback); absent means geometry is not tracked at all. */
+  /** An extra, stable observer of the visibility reports that also feed exposure qualification. */
   onVisibilityChange?: (cards: CardVisibility[]) => void;
 }) {
   const accountId = useAccountId();
@@ -160,10 +161,15 @@ function FeedContent({
   const { colors } = useTheme();
   const list = useRef<FlatList<FeedItem>>(null);
 
-  // Consumers pass a stable callback; a new one starts a new tracker.
+  // Geometry feeds HOME_FEED exposure qualification (#51); rendering never waits on it.
+  const observeExposure = useFeedExposure(feed.refreshGeneration);
   const tracker = useMemo(
-    () => (onVisibilityChange ? new FeedVisibilityTracker(onVisibilityChange) : null),
-    [onVisibilityChange],
+    () =>
+      new FeedVisibilityTracker((cards) => {
+        observeExposure(cards);
+        onVisibilityChange?.(cards);
+      }),
+    [observeExposure, onVisibilityChange],
   );
   const viewportHeight = useRef(0);
   const viewportOffset = useRef(0);
